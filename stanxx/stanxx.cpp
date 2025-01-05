@@ -1,0 +1,6 @@
+
+#include "stanxx.h"
+
+// ...existing code...
+int addNumbers(int a, int b) { return a + b; }
+// ...existing code...
