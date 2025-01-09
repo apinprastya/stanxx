@@ -96,6 +96,7 @@ class Connection : public boost::intrusive::list_base_hook<> {
     void shutdown_input ();
     seastar::future<> close ();
 
+
     protected:
     seastar::future<> read_loop ();
     seastar::future<> read_one ();
@@ -109,7 +110,10 @@ class TransportTcp : public std::enable_shared_from_this<TransportTcp> {
     seastar::future<> listen (const std::string& address, int port);
     seastar::future<> close ();
 
+    friend class Connection;
+
     private:
+    boost::intrusive::list<Connection> _connections;
     seastar::server_socket listener;
     seastar::gate gate;
 };
