@@ -108,7 +108,7 @@ class TransportTcp : public std::enable_shared_from_this<TransportTcp> {
     public:
     ~TransportTcp ();
     seastar::future<> listen (const std::string& address, int port);
-    seastar::future<> close ();
+    seastar::future<> stop ();
 
     friend class Connection;
 

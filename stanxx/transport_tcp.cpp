@@ -127,15 +127,13 @@ seastar::future<> TransportTcp::listen (const std::string& address, int port) {
         .then ([this] (seastar::accept_result ar) {
             spdlog::info ("new connection accepted");
             auto conn = std::make_unique<Connection> (*this, std::move (ar.connection));
-            (void)seastar::try_with_gate (gate,
-            [conn = std::move (conn)] () mutable {
+            (void)seastar::try_with_gate (gate, [conn = std::move (conn)] () mutable {
                 return seastar::do_with (std::move (conn), [] (auto& conn) {
                     return conn->process ().finally ([conn = std::move (conn)] () {
-                        spdlog::info ("connection done 123");
+                        spdlog::info ("connection done");
                     });
                 });
-            })
-            .finally ([] () { spdlog::info ("connection done"); });
+            });
             return seastar::make_ready_future<seastar::stop_iteration> (
             seastar::stop_iteration::no);
         })
@@ -147,11 +145,12 @@ seastar::future<> TransportTcp::listen (const std::string& address, int port) {
     });
 }
 
-seastar::future<> TransportTcp::close () {
+seastar::future<> TransportTcp::stop () {
     spdlog::info ("closing tcp server");
     listener.abort_accept ();
     return gate.close ().then ([this] {
         spdlog::info ("gate closed");
+
         return seastar::parallel_for_each (_connections, [] (Connection& conn) {
             return conn.close ().handle_exception ([] (auto ignored) {});
         });

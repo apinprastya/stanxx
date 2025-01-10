@@ -27,7 +27,7 @@ void Server::run (int argc, char** argv) {
             SIGINT,
             [tcpServer] () {
                 spdlog::info ("SIGNINT");
-                (void)tcpServer->close ();
+                (void)tcpServer->stop ();
             },
             true);
             return tcpServer->listen ("0.0.0.0", 4222);
