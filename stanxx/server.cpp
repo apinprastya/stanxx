@@ -20,22 +20,23 @@ Server::~Server () {
 }
 
 void Server::run (int argc, char** argv) {
-    tcpTransport = std::make_shared<TransportTcp> ();
     app.run (argc, argv, [this] {
-        seastar::handle_signal (
-        SIGINT,
-        [this] () {
-            spdlog::info ("SIGNINT");
-            (void)tcpTransport->close ();
-        },
-        true);
-        /*(void)seastar::sleep (std::chrono::seconds (10)).then ([this] () {
-            return tcpTransport->close ();
-        });*/
-        return seastar::do_with (tcpTransport,
-        [this] (auto tcpServer) { return tcpServer->listen ("0.0.0.0", 4222); });
+        return seastar::do_with (std::make_shared<TransportTcp> (),
+        [this] (auto tcpServer) {
+            seastar::handle_signal (
+            SIGINT,
+            [tcpServer] () {
+                spdlog::info ("SIGNINT");
+                (void)tcpServer->close ();
+            },
+            true);
+            return tcpServer->listen ("0.0.0.0", 4222);
+        })
+        .finally ([this] () {
+            spdlog::info ("server listen ended");
+            seastar::engine ().exit (0);
+        });
     });
-    std::cout << "Server ended" << std::endl;
 }
 
 

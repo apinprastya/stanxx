@@ -1,4 +1,5 @@
 #include "transport_tcp.h"
+#include <memory>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
@@ -48,6 +49,7 @@ seastar::future<> Connection::close () {
 
 Connection::~Connection () {
     spdlog::info ("Connection exiting");
+    _server._connections.erase (_server._connections.iterator_to (*this));
 }
 
 seastar::future<> Connection::read_loop () {
@@ -110,7 +112,6 @@ void Connection::on_new_connection () {
 }
 
 TransportTcp::~TransportTcp () {
-    spdlog::info ("TransportTcp::~TransportTcp");
 }
 
 seastar::future<> TransportTcp::listen (const std::string& address, int port) {
@@ -125,13 +126,13 @@ seastar::future<> TransportTcp::listen (const std::string& address, int port) {
         return listener.accept ()
         .then ([this] (seastar::accept_result ar) {
             spdlog::info ("new connection accepted");
-            auto conn = std::make_shared<Connection> (*this, std::move (ar.connection));
+            auto conn = std::make_unique<Connection> (*this, std::move (ar.connection));
             (void)seastar::try_with_gate (gate,
-            [conn = std::move (conn)] () {
-                // return seastar::do_ti
+            [conn = std::move (conn)] () mutable {
                 return seastar::do_with (std::move (conn), [] (auto& conn) {
-                    return conn->process ().finally (
-                    [] () { spdlog::info ("connection done 123"); });
+                    return conn->process ().finally ([conn = std::move (conn)] () {
+                        spdlog::info ("connection done 123");
+                    });
                 });
             })
             .finally ([] () { spdlog::info ("connection done"); });
@@ -139,6 +140,7 @@ seastar::future<> TransportTcp::listen (const std::string& address, int port) {
             seastar::stop_iteration::no);
         })
         .handle_exception ([this] (std::exception_ptr e) {
+            spdlog::error ("error listening repeat {}", e);
             return seastar::make_ready_future<seastar::stop_iteration> (
             seastar::stop_iteration::yes);
         });
@@ -148,7 +150,12 @@ seastar::future<> TransportTcp::listen (const std::string& address, int port) {
 seastar::future<> TransportTcp::close () {
     spdlog::info ("closing tcp server");
     listener.abort_accept ();
-    return gate.close ().then ([this] { spdlog::info ("gate closed"); });
+    return gate.close ().then ([this] {
+        spdlog::info ("gate closed");
+        return seastar::parallel_for_each (_connections, [] (Connection& conn) {
+            return conn.close ().handle_exception ([] (auto ignored) {});
+        });
+    });
 }
 
 } // namespace stanxx

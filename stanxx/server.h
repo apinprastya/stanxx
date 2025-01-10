@@ -47,7 +47,6 @@ class Server {
     void run (int argc, char** argv);
 
     private:
-    std::shared_ptr<TransportTcp> tcpTransport;
     seastar::app_template app;
     seastar::sharded<TransportTcp> mainTransport;
 
