@@ -1,18 +1,23 @@
 #pragma once
 
 #include <boost/intrusive/list_hook.hpp>
-#include <memory>
 #include <seastar/core/gate.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/core/resource.hh>
+#include <seastar/core/temporary_buffer.hh>
 #include <seastar/net/api.hh>
+#include <spdlog/spdlog.h>
 
 #define QUEUE_SIZE 512
 
 namespace stanxx {
 
+class Server;
 class TransportTcp;
+class Connection;
+
+using handler_t = std::function<seastar::future<> (Connection* connection)>;
 
 class Connection : public boost::intrusive::list_base_hook<> {
     using buff_t = seastar::temporary_buffer<char>;
@@ -65,6 +70,8 @@ class Connection : public boost::intrusive::list_base_hook<> {
     };
 
     TransportTcp& _server;
+    std::string _id{};
+    int _cpuId{};
     seastar::connected_socket _fd;
     seastar::input_stream<char> _read_buf;
     seastar::output_stream<char> _write_buf;
@@ -80,22 +87,21 @@ class Connection : public boost::intrusive::list_base_hook<> {
      * \param server owning \ref server
      * \param fd established socket used for communication
      */
-    Connection (TransportTcp& server, seastar::connected_socket&& fd)
-    : _server (server), _fd (std::move (fd)), _read_buf (_fd.input ()),
-      _write_buf (_fd.output ()), _input_buffer{ QUEUE_SIZE },
-      _output_buffer{ QUEUE_SIZE } {
-        _input  = seastar::input_stream<char>{ seastar::data_source{
-        std::make_unique<connection_source_impl> (&_input_buffer) } };
-        _output = seastar::output_stream<char>{ seastar::data_sink{
-        std::make_unique<connection_sink_impl> (&_output_buffer) } };
-        on_new_connection ();
-    }
+    Connection (TransportTcp& server, seastar::connected_socket&& fd);
     ~Connection ();
 
-    seastar::future<> process ();
+    seastar::future<> process (handler_t handler);
     void shutdown_input ();
     seastar::future<> close ();
-
+    seastar::future<seastar::temporary_buffer<char>> read ();
+    seastar::future<> write (seastar::temporary_buffer<char> data);
+    seastar::future<> flush ();
+    inline std::string id () const noexcept {
+        return _id;
+    }
+    inline int cpuId () const noexcept {
+        return _cpuId;
+    }
 
     protected:
     seastar::future<> read_loop ();
@@ -104,8 +110,9 @@ class Connection : public boost::intrusive::list_base_hook<> {
     void on_new_connection ();
 };
 
-class TransportTcp : public std::enable_shared_from_this<TransportTcp> {
+class TransportTcp {
     public:
+    TransportTcp (Server* server);
     ~TransportTcp ();
     seastar::future<> listen (const std::string& address, int port);
     seastar::future<> stop ();
@@ -113,6 +120,8 @@ class TransportTcp : public std::enable_shared_from_this<TransportTcp> {
     friend class Connection;
 
     private:
+    int _cpuId;
+    Server* _server;
     boost::intrusive::list<Connection> _connections;
     seastar::server_socket listener;
     seastar::gate gate;

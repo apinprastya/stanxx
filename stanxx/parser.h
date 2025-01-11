@@ -2,6 +2,8 @@
 
 #include <memory>
 #include <optional>
+#include <seastar/core/future.hh>
+#include <seastar/core/temporary_buffer.hh>
 #include <span>
 #include <string>
 #include <string_view>
@@ -142,16 +144,17 @@ struct PublishArg {
 class MessageParser {
     public:
     MessageParser (Client* client);
-    std::optional<ParserError> parseMessage (const std::span<const char>& data);
+    seastar::future<std::optional<ParserError>> parseMessage (
+    seastar::temporary_buffer<char> data);
 
     private:
-    std::shared_ptr<Client> mClient;
+    std::shared_ptr<Client> _client;
     EParserState state = EParserState::OP_START;
-    int mDrop{};
-    int mStart{};
-    std::optional<std::vector<char>> mBuff{};
-    ParserError parserErr;
-    PublishArg mPublishArg;
+    int _drop{};
+    int _start{};
+    std::optional<std::vector<char>> _buff{};
+    ParserError _parserErr;
+    PublishArg _publishArg;
 
     void reset ();
     std::vector<std::string_view> splitSubcribeArg (const std::span<const char>& data);

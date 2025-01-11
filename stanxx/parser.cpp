@@ -2,9 +2,9 @@
 #include "client.h"
 #include <charconv>
 #include <fmt/format.h>
-#include <iostream>
-#include <iterator>
 #include <optional>
+#include <seastar/core/future.hh>
+#include <seastar/core/temporary_buffer.hh>
 #include <span>
 #include <spdlog/spdlog.h>
 #include <string_view>
@@ -115,21 +115,22 @@ std::string ParserError::errorString () {
     to_string (code), to_string (lastState), message);
 }
 
-MessageParser::MessageParser (Client* client) : mClient (client) {
+MessageParser::MessageParser (Client* client) : _client (client) {
 }
 
 void MessageParser::reset () {
     state  = EParserState::OP_START;
-    mDrop  = 0;
-    mStart = 0;
-    if (mBuff)
-        mBuff.value ().clear ();
-    mBuff = std::nullopt;
-    mPublishArg.reset ();
+    _drop  = 0;
+    _start = 0;
+    if (_buff)
+        _buff.value ().clear ();
+    _buff = std::nullopt;
+    _publishArg.reset ();
 }
 
-std::optional<ParserError> MessageParser::parseMessage (const std::span<const char>& data) {
-    for (int i; i < data.size (); i++) {
+seastar::future<std::optional<ParserError>> MessageParser::parseMessage (
+seastar::temporary_buffer<char> data) {
+    for (int i = 0; i < data.size (); i++) {
         auto b = data[i];
         switch (state) {
         case EParserState::OP_START: {
@@ -142,7 +143,7 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
             case 's': state = EParserState::OP_S; break;
             default:
                 state = EParserState::OP_ERROR;
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 break;
             }
         } break;
@@ -151,7 +152,7 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
                 state = EParserState::OP_CO;
                 break;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
         } break;
@@ -160,7 +161,7 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
                 state = EParserState::OP_CON;
                 break;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
             break;
@@ -169,7 +170,7 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
                 state = EParserState::OP_CONN;
                 break;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
             break;
@@ -178,7 +179,7 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
                 state = EParserState::OP_CONNE;
                 break;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
             break;
@@ -187,7 +188,7 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
                 state = EParserState::OP_CONNEC;
                 break;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
             break;
@@ -196,33 +197,34 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
                 state = EParserState::OP_CONNECT;
                 break;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
             break;
         case EParserState::OP_CONNECT:
             if (b == ' ' || b == '\t') {
                 state  = EParserState::CONNECT_ARG;
-                mStart = i;
+                _start = i;
             }
             break;
         case EParserState::CONNECT_ARG:
             switch (b) {
-            case '\r': mDrop = i; break;
+            case '\r': _drop = i; break;
             case '\n': {
-                std::span<const char> arg;
-                if (!mBuff) {
-                    auto length = mDrop - mStart;
-                    arg = std::span<const char> (data.data () + mStart, length);
+                seastar::temporary_buffer<char> arg;
+                if (!_buff) {
+                    auto length = _drop - _start;
+                    arg = seastar::temporary_buffer<char> (data.get () + _start, length);
                 } else {
-                    arg = mBuff.value ();
+                    arg = seastar::temporary_buffer<char> (
+                    _buff.value ().data (), _buff.value ().size ());
                 }
-                // mClient->processConnect (arg);
+                (void)_client->processConnect (std::move (arg));
                 reset ();
             } break;
             default:
-                if (mBuff)
-                    mBuff.value ().push_back (b);
+                if (_buff)
+                    _buff.value ().push_back (b);
                 break;
             }
             break;
@@ -235,7 +237,7 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
             case 'u':
             case 'U': state = EParserState::OP_PU; break;
             default:
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
                 break;
             }
@@ -244,7 +246,7 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
             if (b == 'n' || b == 'N') {
                 state = EParserState::OP_PIN;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
             break;
@@ -252,13 +254,13 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
             if (b == 'g' || b == 'G') {
                 state = EParserState::OP_PING;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
             break;
         case EParserState::OP_PING:
             if (b == '\n') {
-                // mClient->processPing ();
+                (void)_client->processPing ();
                 reset ();
             }
             break;
@@ -266,7 +268,7 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
             if (b == 'n' || b == 'N') {
                 state = EParserState::OP_PON;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
             break;
@@ -274,13 +276,13 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
             if (b == 'g' || b == 'G') {
                 state = EParserState::OP_PONG;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
             break;
         case EParserState::OP_PONG:
             if (b == '\n') {
-                // mClient->processPong ();
+                (void)_client->processPong ();
                 reset ();
             }
             break;
@@ -288,7 +290,7 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
             if (b == 'u' || b == 'U') {
                 state = EParserState::OP_SU;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
             break;
@@ -296,7 +298,7 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
             if (b == 'b' || b == 'B') {
                 state = EParserState::OP_SUB;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
             break;
@@ -304,7 +306,7 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
             if (b == ' ' || b == '\t') {
                 state = EParserState::OP_SUB_SPC;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
             break;
@@ -313,27 +315,28 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
                 continue;
             } else {
                 state  = EParserState::SUB_ARG;
-                mStart = i;
+                _start = i;
             }
             break;
         case EParserState::SUB_ARG:
             switch (b) {
-            case '\r': mDrop = i; break;
+            case '\r': _drop = i; break;
             case '\n': {
-                std::span<const char> arg;
-                if (!mBuff) {
-                    auto length = mDrop - mStart;
-                    arg = std::span<const char> (data.data () + mStart, length);
+                seastar::temporary_buffer<char> arg;
+                if (!_buff) {
+                    auto length = _drop - _start;
+                    arg = seastar::temporary_buffer<char> (data.get () + _start, length);
                 } else {
-                    arg = mBuff.value ();
+                    arg = seastar::temporary_buffer<char> (
+                    _buff.value ().data (), _buff.value ().size ());
                 }
                 auto subscribeArgs = splitSubcribeArg (arg);
-                // mClient->processSubscribe (subscribeArgs);
+                (void)_client->processSubscribe (subscribeArgs);
                 reset ();
             } break;
             default:
-                if (mBuff)
-                    mBuff.value ().push_back (b);
+                if (_buff)
+                    _buff.value ().push_back (b);
                 break;
             }
             break;
@@ -341,7 +344,7 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
             if (b == 'b' || b == 'B') {
                 state = EParserState::OP_PUB;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
             break;
@@ -349,7 +352,7 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
             if (b == ' ' || b == '\t') {
                 state = EParserState::OP_PUB_SPC;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
             break;
@@ -357,77 +360,83 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
             if (b == ' ' || b == '\t') {
                 continue;
             } else {
-                mStart = i;
+                _start = i;
                 state  = EParserState::PUB_ARG;
             }
             break;
         case EParserState::PUB_ARG:
             switch (b) {
-            case '\r': mDrop = i; break;
+            case '\r': _drop = i; break;
             case '\n': {
-                std::span<const char> arg;
-                if (!mBuff) {
-                    auto length = mDrop - mStart;
-                    arg = std::span<const char> (data.data () + mStart, length);
+                seastar::temporary_buffer<char> arg;
+                if (!_buff) {
+                    auto length = _drop - _start;
+                    arg = seastar::temporary_buffer<char> (data.get () + _start, length);
                 } else {
-                    arg = mBuff.value ();
+                    arg = seastar::temporary_buffer<char> (
+                    _buff.value ().data (), _buff.value ().size ());
                 }
                 parsePublishArg (arg);
-                mStart = i + 1;
-                mDrop  = 0;
+                _start = i + 1;
+                _drop  = 0;
                 state  = EParserState::MSG_PAYLOAD;
-                if (!mBuff) {
-                    i = mStart + mPublishArg.length - lenCRLF;
+                if (!_buff) {
+                    i = _start + _publishArg.length - lenCRLF;
                 }
             } break;
             default:
-                if (mBuff)
-                    mBuff.value ().push_back (b);
+                if (_buff)
+                    _buff.value ().push_back (b);
                 break;
             }
             break;
         case EParserState::MSG_PAYLOAD:
-            if (mBuff) {
+            if (_buff) {
 
-            } else if (i - mStart + 1 >= mPublishArg.length) {
+            } else if (i - _start + 1 >= _publishArg.length) {
                 state = EParserState::MSG_END_R;
             }
             break;
         case EParserState::MSG_END_R:
             if (b == '\r') {
-                if (mBuff) {
-                    mBuff.value ().push_back (b);
+                if (_buff) {
+                    _buff.value ().push_back (b);
                 } else {
                 }
                 state = EParserState::MSG_END_N;
             } else {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
             break;
         case EParserState::MSG_END_N:
             if (b != '\n') {
-                parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
                 continue;
             }
-            if (mBuff) {
-                mBuff.value ().push_back (b);
+            if (_buff) {
+                _buff.value ().push_back (b);
             } else {
-                auto subSpan = data.subspan (mStart, mPublishArg.length);
-                mBuff = std::vector<char> (subSpan.begin (), subSpan.end ());
+                _buff = std::vector<char> (
+                data.get () + _start, data.get () + _start + _publishArg.length);
                 spdlog::debug (
-                "real data: {}", std::string (mBuff->begin (), mBuff->end ()));
+                "real data: {}", std::string (_buff->begin (), _buff->end ()));
+                /*auto subSpan = data.subspan (_start, _publishArg.length)  ;
+                _buff = std::vector<char> (subSpan.begin (), subSpan.end ());
+                */
             }
-            /*mClient->processPublish (
-            mPublishArg, std::span<char> (mBuff->begin (), mBuff->end ()));*/
+            (void)_client->processPublish (_publishArg,
+            seastar::temporary_buffer<char> (_buff->data (), _buff->size ()));
             reset ();
             break;
 
-        case EParserState::OP_ERROR: reset (); return parserErr;
+        case EParserState::OP_ERROR:
+            reset ();
+            return seastar::make_ready_future<std::optional<ParserError>> (_parserErr);
         }
     }
-    return std::nullopt;
+    return seastar::make_ready_future<std::optional<ParserError>> (std::nullopt);
 }
 
 std::vector<std::string_view> MessageParser::splitSubcribeArg (
@@ -484,22 +493,22 @@ void MessageParser::parsePublishArg (const std::span<const char>& data) {
     }
     int value;
     if (splits.size () == 2) {
-        mPublishArg.subject = std::string (splits[0]);
+        _publishArg.subject = std::string (splits[0]);
         auto [ptr, ec]      = std::from_chars (
-             splits[1].data (), splits[1].data () + splits[1].size (), value);
+        splits[1].data (), splits[1].data () + splits[1].size (), value);
         if (ec == std::errc ()) {
-            mPublishArg.length = value;
+            _publishArg.length = value;
         } else {
             spdlog::error ("parsePublishArg with length 2: got error {}",
             std::string (data.begin (), data.end ()));
         }
     } else if (splits.size () == 3) {
-        mPublishArg.subject = std::string (splits[0]);
-        mPublishArg.reply   = std::string (splits[1]);
+        _publishArg.subject = std::string (splits[0]);
+        _publishArg.reply   = std::string (splits[1]);
         auto [ptr, ec]      = std::from_chars (
-             splits[2].data (), splits[2].data () + splits[2].size (), value);
+        splits[2].data (), splits[2].data () + splits[2].size (), value);
         if (ec == std::errc ()) {
-            mPublishArg.length = value;
+            _publishArg.length = value;
         } else {
             spdlog::error ("parsePublishArg with length 3: got error {}",
             std::string (data.begin (), data.end ()));

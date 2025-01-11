@@ -1,6 +1,6 @@
 #include "server.h"
+#include "subscriber.h"
 #include "transport_tcp.h"
-#include <chrono>
 #include <csignal>
 #include <memory>
 #include <seastar/core/do_with.hh>
@@ -14,14 +14,16 @@
 namespace stanxx {
 
 Server::Server () {
+    _subscribeManager = std::make_unique<SubscriberManager> ();
 }
 
 Server::~Server () {
 }
 
 void Server::run (int argc, char** argv) {
+    spdlog::set_level (spdlog::level::debug);
     app.run (argc, argv, [this] {
-        return seastar::do_with (std::make_shared<TransportTcp> (),
+        return seastar::do_with (std::make_shared<TransportTcp> (this),
         [this] (auto tcpServer) {
             seastar::handle_signal (
             SIGINT,
@@ -37,12 +39,6 @@ void Server::run (int argc, char** argv) {
             seastar::engine ().exit (0);
         });
     });
-}
-
-
-seastar::future<> Server::handle_client (seastar::connected_socket conn) {
-    std::cout << "New connection" << std::endl;
-    return seastar::make_ready_future<> ();
 }
 
 } // namespace stanxx

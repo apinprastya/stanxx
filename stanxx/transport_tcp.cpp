@@ -1,4 +1,9 @@
 #include "transport_tcp.h"
+#include "client.h"
+#include "server.h"
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <memory>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/future.hh>
@@ -11,10 +16,37 @@
 #include <seastar/net/socket_defs.hh>
 #include <spdlog/spdlog.h>
 
+static boost::uuids::random_generator generator;
+
 namespace stanxx {
 
-seastar::future<> Connection::process () {
-    return seastar::when_all_succeed (read_loop (), write_loop ())
+Connection::Connection (TransportTcp& server, seastar::connected_socket&& fd)
+: _server (server), _fd (std::move (fd)), _read_buf (_fd.input ()),
+  _write_buf (_fd.output ()), _input_buffer{ QUEUE_SIZE }, _output_buffer{ QUEUE_SIZE } {
+    auto uuid = generator ();
+    _id       = boost::uuids::to_string (uuid);
+    _cpuId    = seastar::this_shard_id ();
+    _input    = seastar::input_stream<char>{ seastar::data_source{
+    std::make_unique<connection_source_impl> (&_input_buffer) } };
+    _output   = seastar::output_stream<char>{ seastar::data_sink{
+    std::make_unique<connection_sink_impl> (&_output_buffer) } };
+    on_new_connection ();
+}
+
+seastar::future<seastar::temporary_buffer<char>> Connection::read () {
+    return _input.read ();
+}
+
+seastar::future<> Connection::write (seastar::temporary_buffer<char> data) {
+    return _output.write (std::move (data));
+}
+
+seastar::future<> Connection::flush () {
+    return _output.flush ();
+}
+
+seastar::future<> Connection::process (handler_t handler) {
+    return seastar::when_all_succeed (read_loop (), write_loop (), handler (this))
     .discard_result ()
     .handle_exception ([] (const std::exception_ptr& e) {
         spdlog::error ("processing failed: {}", e);
@@ -41,31 +73,27 @@ seastar::future<> Connection::close () {
             spdlog::error ("processing failed: unknown exception");
         }
     })
-    .finally ([this] {
-        spdlog::info ("connection finish");
-        _fd.shutdown_output ();
-    });
+    .finally ([this] { _fd.shutdown_output (); });
 }
 
 Connection::~Connection () {
-    spdlog::info ("Connection exiting");
     _server._connections.erase (_server._connections.iterator_to (*this));
 }
 
 seastar::future<> Connection::read_loop () {
-    spdlog::info ("reading loop");
+    spdlog::debug ("reading loop");
     return seastar::do_until (
     [this] () { return _done; }, [this] { return read_one (); })
-    .finally ([this] () { _output_buffer.push ({}); });
+    .finally ([this] () {
+        _output_buffer.push ({});
+        return close ();
+    });
 }
 
 seastar::future<> Connection::read_one () {
-    spdlog::info ("read one");
     return _read_buf.read ()
     .then ([this] (seastar::temporary_buffer<char> data) {
-        spdlog::info ("new data: {} {} {}",
-        std::string (data.get (), data.size ()), data.size (), _read_buf.eof ());
-        if (_read_buf.eof ()) {
+        if (data.size () == 0) {
             _done = true;
             return seastar::make_ready_future<> ();
         }
@@ -79,7 +107,6 @@ seastar::future<> Connection::read_one () {
 }
 
 seastar::future<> Connection::write_loop () {
-    spdlog::info ("write loop");
     return seastar::do_until ([this] () { return _done; },
     [this] () {
         return _output_buffer.pop_eventually ().then (
@@ -95,26 +122,17 @@ seastar::future<> Connection::write_loop () {
 }
 
 void Connection::on_new_connection () {
-    spdlog::info ("on_new_connection");
     _server._connections.push_back (*this);
-    char* data =
-    "INFO "
-    "{\"server_id\":"
-    "\"NCEUKVMQR4KCNGMKEAIEFS5OF4VMI34DXCTZ5HBFR4YSLETPHFDEWIRQ\",\"server_"
-    "name\":\"NCEUKVMQR4KCNGMKEAIEFS5OF4VMI34DXCTZ5HBFR4YSLETPHFDEWIRQ\","
-    "\"version\":\"2.11.0-dev\",\"proto\" : 1,\"go\" : "
-    "\"go1.23.3\",\"host\" : \"0.0.0.0\",\"port\" : 4222,\"headers\" : "
-    "true,\"max_payload\" : "
-    "1048576,\"client_id\":5,\"client_ip\":\"127.0.0.1\",\"xkey\":"
-    "\"XBRNVBBFW45EB3RA7JI3D6HU6ROXESE2EU2IXXTWYOCENKIGI5AW2GU2\"}\r\n";
-    (void)_output_buffer.push_eventually (
-    seastar::temporary_buffer<char> (data, strlen (data)));
+}
+
+TransportTcp::TransportTcp (Server* server) : _server (server) {
 }
 
 TransportTcp::~TransportTcp () {
 }
 
 seastar::future<> TransportTcp::listen (const std::string& address, int port) {
+    _cpuId = seastar::this_shard_id ();
     seastar::socket_address sa (seastar::ipv4_addr (address, port));
     seastar::listen_options opts;
     opts.reuse_address = true;
@@ -122,15 +140,18 @@ seastar::future<> TransportTcp::listen (const std::string& address, int port) {
     spdlog::info ("listening on {}:{}", address, port);
 
     return seastar::repeat ([this] () {
-        spdlog::info ("waiting for connection");
+        spdlog::debug ("waiting for connection");
         return listener.accept ()
         .then ([this] (seastar::accept_result ar) {
-            spdlog::info ("new connection accepted");
+            spdlog::debug ("new connection accepted");
             auto conn = std::make_unique<Connection> (*this, std::move (ar.connection));
-            (void)seastar::try_with_gate (gate, [conn = std::move (conn)] () mutable {
-                return seastar::do_with (std::move (conn), [] (auto& conn) {
-                    return conn->process ().finally ([conn = std::move (conn)] () {
-                        spdlog::info ("connection done");
+            (void)seastar::try_with_gate (gate, [conn = std::move (conn), this] () mutable {
+                return seastar::do_with (std::move (conn), [this] (auto& conn) {
+                    return conn->process ([this] (Connection* connection) {
+                        auto client = std::make_unique<Client> (connection->id (),
+                        connection->cpuId (), connection, _server);
+                        return seastar::do_with (std::move (client),
+                        [] (auto& client) { return client->run (); });
                     });
                 });
             });
@@ -148,8 +169,13 @@ seastar::future<> TransportTcp::listen (const std::string& address, int port) {
 seastar::future<> TransportTcp::stop () {
     spdlog::info ("closing tcp server");
     listener.abort_accept ();
+
+    for (auto&& c : _connections) {
+        c.shutdown_input ();
+    }
+
     return gate.close ().then ([this] {
-        spdlog::info ("gate closed");
+        spdlog::debug ("gate closed");
 
         return seastar::parallel_for_each (_connections, [] (Connection& conn) {
             return conn.close ().handle_exception ([] (auto ignored) {});

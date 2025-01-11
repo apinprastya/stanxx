@@ -11,6 +11,7 @@
 
 namespace stanxx {
 
+class SubscriberManager;
 
 struct Info {
     std::string id{};
@@ -40,16 +41,24 @@ struct Info {
     }
 };
 
-class Server {
+class SubscriberManagerHandler {
+    public:
+    virtual SubscriberManager* getSubscriberManager () = 0;
+};
+
+class Server : public SubscriberManagerHandler {
     public:
     Server ();
     ~Server ();
     void run (int argc, char** argv);
 
+    inline SubscriberManager* getSubscriberManager () override {
+        return _subscribeManager.get ();
+    }
+
     private:
     seastar::app_template app;
     seastar::sharded<TransportTcp> mainTransport;
-
-    seastar::future<> handle_client (seastar::connected_socket conn);
+    std::unique_ptr<SubscriberManager> _subscribeManager;
 };
 } // namespace stanxx

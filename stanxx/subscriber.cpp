@@ -1,11 +1,12 @@
 #include "subscriber.h"
+#include "client.h"
 #include <memory>
 #include <vector>
 
 namespace stanxx {
 
-Subscriber::Subscriber (const std::string& subject, const std::string& subId)
-: mSubject (subject), mId (subId) {
+Subscriber::Subscriber (const std::string& subject, const std::string& subId, Client* client)
+: _subject (subject), _id (subId), _client (client) {
 }
 
 std::vector<std::string> SubscriberManager::splitTopic (const std::string& topic) const {
@@ -23,9 +24,9 @@ int SubscriberManager::addSubscriber (std::shared_ptr<Subscriber> subscriber) {
     return root.subscribe (parts, 0, subscriber);
 }
 
-void SubscriberManager::unsubscribeClientId (int id) {
+void SubscriberManager::unsubscribeClientId (const std::string& id) {
     root.removeIf ([id] (std::shared_ptr<Subscriber> item) -> bool {
-        // return item->getClient ()->getId () == id;
+        return item->getClient ()->getId () == id;
         return true;
     });
 }

@@ -10,6 +10,8 @@
 
 namespace stanxx {
 
+class Client;
+
 template <typename T> class SubjectNode {
     private:
     std::unordered_map<std::string, std::unique_ptr<SubjectNode>> children;
@@ -95,23 +97,27 @@ template <typename T> class SubscriberNode {
 
 class Subscriber {
     public:
-    Subscriber (const std::string& subject, const std::string& subId);
+    Subscriber (const std::string& subject, const std::string& subId, Client* client);
     inline const std::string& getSubject () const {
-        return mSubject;
+        return _subject;
     }
     inline const std::string& getId () const {
-        return mId;
+        return _id;
+    }
+    inline Client* getClient () const {
+        return _client;
     }
 
     private:
-    std::string mSubject{};
-    std::string mId{};
+    std::string _subject{};
+    std::string _id{};
+    Client* _client{};
 };
 
 class SubscriberManager {
     public:
     int addSubscriber (std::shared_ptr<Subscriber> subscriber);
-    void unsubscribeClientId (int id);
+    void unsubscribeClientId (const std::string& id);
     std::vector<std::shared_ptr<Subscriber>> getSubscriber (const std::string& subject);
 
     private:
