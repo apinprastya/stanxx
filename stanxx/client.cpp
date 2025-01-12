@@ -65,9 +65,7 @@ seastar::future<> Client::run () {
         "\"XBRNVBBFW45EB3RA7JI3D6HU6ROXESE2EU2IXXTWYOCENKIGI5AW2GU2\"}\r\n";
         return _connection
         ->write (seastar::temporary_buffer<char> (data, strlen (data)))
-        .then ([this] () {
-            return _connection->flush ().then ([this] () { return loopRead (); });
-        });
+        .then ([this] () { return loopRead (); });
     }
     return seastar::make_exception_future (
     std::runtime_error ("connection is null"));
@@ -118,36 +116,29 @@ seastar::future<> Client::processPing () {
     spdlog::debug ("process ping message");
     constexpr const char* pongMessage = "PONG\r\n";
     const std::size_t length          = std::strlen (pongMessage);
-    return _connection
-    ->write (seastar::temporary_buffer<char> (pongMessage, length))
-    .then ([this] () { return _connection->flush (); });
+    return _connection->write (seastar::temporary_buffer<char> (pongMessage, length));
 }
 
 seastar::future<> Client::sendPing () {
     spdlog::debug ("sending ping");
     constexpr const char* pongMessage = "PING\r\n";
     const std::size_t length          = std::strlen (pongMessage);
-    return _connection
-    ->write (seastar::temporary_buffer<char> (pongMessage, length))
-    .then ([this] () { return _connection->flush (); });
+    return _connection->write (seastar::temporary_buffer<char> (pongMessage, length));
     _roundTrip.setStartToNow ();
 }
 
 seastar::future<> Client::sendError (const std::string& err) {
     spdlog::debug ("sending error");
     auto messageStr = fmt::format ("-ERR '{}'\r\n", err);
-    return _connection
-    ->write (seastar::temporary_buffer<char> (messageStr.data (), messageStr.size ()))
-    .then ([this] () { return _connection->flush (); });
+    return _connection->write (
+    seastar::temporary_buffer<char> (messageStr.data (), messageStr.size ()));
 }
 
 seastar::future<> Client::sendOK () {
     spdlog::debug ("sending ok");
     constexpr const char* pongMessage = "+OK\r\n";
     const std::size_t length          = std::strlen (pongMessage);
-    return _connection
-    ->write (seastar::temporary_buffer<char> (pongMessage, length))
-    .then ([this] () { return _connection->flush (); });
+    return _connection->write (seastar::temporary_buffer<char> (pongMessage, length));
 }
 
 seastar::future<> Client::processPong () {
@@ -205,9 +196,7 @@ seastar::temporary_buffer<char> data) {
 }
 
 seastar::future<> Client::sendMessage (seastar::temporary_buffer<char> data) {
-    return _connection->write (std::move (data)).then ([this] () {
-        return _connection->flush ();
-    });
+    return _connection->write (std::move (data));
 }
 
 } // namespace stanxx
