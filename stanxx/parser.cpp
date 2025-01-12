@@ -4,6 +4,7 @@
 #include <fmt/format.h>
 #include <optional>
 #include <seastar/core/future.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <span>
 #include <spdlog/spdlog.h>
@@ -219,7 +220,7 @@ seastar::temporary_buffer<char> data) {
                     arg = seastar::temporary_buffer<char> (
                     _buff.value ().data (), _buff.value ().size ());
                 }
-                (void)_client->processConnect (std::move (arg));
+                co_await _client->processConnect (std::move (arg));
                 reset ();
             } break;
             default:
@@ -420,23 +421,19 @@ seastar::temporary_buffer<char> data) {
             } else {
                 _buff = std::vector<char> (
                 data.get () + _start, data.get () + _start + _publishArg.length);
-                spdlog::debug (
-                "real data: {}", std::string (_buff->begin (), _buff->end ()));
-                /*auto subSpan = data.subspan (_start, _publishArg.length)  ;
-                _buff = std::vector<char> (subSpan.begin (), subSpan.end ());
-                */
             }
             (void)_client->processPublish (_publishArg,
             seastar::temporary_buffer<char> (_buff->data (), _buff->size ()));
             reset ();
             break;
 
-        case EParserState::OP_ERROR:
+        case EParserState::OP_ERROR: {
             reset ();
-            return seastar::make_ready_future<std::optional<ParserError>> (_parserErr);
+            co_return _parserErr;
+        }
         }
     }
-    return seastar::make_ready_future<std::optional<ParserError>> (std::nullopt);
+    co_return std::nullopt;
 }
 
 std::vector<std::string_view> MessageParser::splitSubcribeArg (

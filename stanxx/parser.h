@@ -148,7 +148,7 @@ class MessageParser {
     seastar::temporary_buffer<char> data);
 
     private:
-    std::shared_ptr<Client> _client;
+    Client* _client;
     EParserState state = EParserState::OP_START;
     int _drop{};
     int _start{};

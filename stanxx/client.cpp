@@ -3,12 +3,14 @@
 #include "server.h"
 #include "subscriber.h"
 #include "transport_tcp.h"
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/loop.hh>
+#include <seastar/core/timer.hh>
 #include <seastar/core/when_all.hh>
 #include <spdlog/spdlog.h>
 #include <utility>
@@ -47,13 +49,16 @@ Client::Client (const std::string& id, int cpuId, Connection* connection, Subscr
 
 Client::~Client () {
     _subscriberManagerHandler->getSubscriberManager ()->unsubscribeClientId (_id);
-    _pingTimer.cancel ();
+    if (_pingTimer) {
+        _pingTimer->cancel ();
+        _pingTimer = nullptr;
+    }
 }
 
 seastar::future<> Client::run () {
     if (_connection != nullptr) {
         // first we need to send the welcome message
-        char* data =
+        static char* data =
         "INFO "
         "{\"server_id\":"
         "\"NCEUKVMQR4KCNGMKEAIEFS5OF4VMI34DXCTZ5HBFR4YSLETPHFDEWIRQ\",\"server_"
@@ -63,9 +68,8 @@ seastar::future<> Client::run () {
         "true,\"max_payload\" : "
         "1048576,\"client_id\":5,\"client_ip\":\"127.0.0.1\",\"xkey\":"
         "\"XBRNVBBFW45EB3RA7JI3D6HU6ROXESE2EU2IXXTWYOCENKIGI5AW2GU2\"}\r\n";
-        return _connection
-        ->write (seastar::temporary_buffer<char> (data, strlen (data)))
-        .then ([this] () { return loopRead (); });
+        (void)_connection->write (seastar::temporary_buffer<char> (data, strlen (data)));
+        return loopRead ();
     }
     return seastar::make_exception_future (
     std::runtime_error ("connection is null"));
@@ -105,9 +109,13 @@ seastar::future<> Client::processConnect (seastar::temporary_buffer<char> data) 
     auto reqArg = dataJson.get<ClientOpts> ();
     spdlog::debug ("{} {} {}", reqArg.name, reqArg.lang, reqArg.version);
 
-    _pingTimer.set_callback ([this] () { (void)sendPing (); });
+    if (!_pingTimer) {
+        _pingTimer = std::make_shared<seastar::timer<>> ();
+    }
+
+    _pingTimer->set_callback ([this] () { (void)sendPing (); });
     // TODO: set the ping interval from the client opts
-    _pingTimer.arm_periodic (std::chrono::seconds{ 5 });
+    _pingTimer->arm_periodic (std::chrono::seconds{ 5 });
 
     return seastar::make_ready_future<> ();
 }

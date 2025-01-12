@@ -29,6 +29,7 @@ class Connection : public boost::intrusive::list_base_hook<> {
     seastar::future<> close ();
     seastar::future<seastar::temporary_buffer<char>> read ();
     seastar::future<> write (seastar::temporary_buffer<char> data);
+    seastar::future<> flush ();
     inline std::string id () const noexcept {
         return _id;
     }
@@ -46,13 +47,10 @@ class Connection : public boost::intrusive::list_base_hook<> {
     TransportTcp* _server;
     std::string _id{};
     int _cpuId{};
-    seastar::connected_socket _fd;
     seastar::input_stream<char> _read_buf;
     seastar::output_stream<char> _write_buf;
-    bool _done = false;
-
-    seastar::queue<seastar::temporary_buffer<char>> _input_buffer;
-    seastar::queue<seastar::temporary_buffer<char>> _output_buffer;
+    seastar::queue<seastar::temporary_buffer<char>> _input_buffer{ 512 };
+    seastar::queue<seastar::temporary_buffer<char>> _output_buffer{ 512 };
 };
 
 class TransportTcp {

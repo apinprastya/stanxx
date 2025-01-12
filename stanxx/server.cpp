@@ -9,6 +9,7 @@
 #include <seastar/core/signal.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/net/api.hh>
+#include <spdlog/common.h>
 #include <spdlog/spdlog.h>
 
 namespace stanxx {
@@ -21,7 +22,7 @@ Server::~Server () {
 }
 
 void Server::run (int argc, char** argv) {
-    spdlog::set_level (spdlog::level::debug);
+    spdlog::set_level (spdlog::level::err);
     app.run (argc, argv, [this] {
         return seastar::do_with (std::make_shared<TransportTcp> (this),
         [this] (auto tcpServer) {

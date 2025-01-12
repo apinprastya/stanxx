@@ -2,6 +2,7 @@
 
 #include "parser.h"
 #include "transport_tcp.h"
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <seastar/core/future.hh>
 #include <seastar/core/temporary_buffer.hh>
@@ -130,7 +131,7 @@ class Client {
     Connection* _connection;
     std::unique_ptr<MessageParser> _parser{};
     RoundTrip _roundTrip{};
-    seastar::timer<> _pingTimer;
+    std::shared_ptr<seastar::timer<>> _pingTimer = nullptr;
     SubscriberManagerHandler* _subscriberManagerHandler;
 
     seastar::future<> loopRead ();
