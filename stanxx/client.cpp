@@ -48,7 +48,8 @@ Client::Client (const std::string& id, int cpuId, Connection* connection, Subscr
 }
 
 Client::~Client () {
-    _subscriberManagerHandler->getSubscriberManager ()->unsubscribeClientId (_id);
+    if (_subscriberManagerHandler != nullptr)
+        _subscriberManagerHandler->getSubscriberManager ()->unsubscribeClientId (_id);
     if (_pingTimer) {
         _pingTimer->cancel ();
         _pingTimer = nullptr;

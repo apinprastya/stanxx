@@ -5,4 +5,4 @@ set(CMAKE_CXX_STANDARD 23)
 
 add_subdirectory(stanxx)
 add_subdirectory(stanxx-server)
-add_subdirectory(test)
+add_subdirectory(tests)

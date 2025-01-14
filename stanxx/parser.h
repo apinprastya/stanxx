@@ -1,6 +1,5 @@
 #pragma once
 
-#include <memory>
 #include <optional>
 #include <seastar/core/future.hh>
 #include <seastar/core/temporary_buffer.hh>
@@ -144,8 +143,7 @@ struct PublishArg {
 class MessageParser {
     public:
     MessageParser (Client* client);
-    seastar::future<std::optional<ParserError>> parseMessage (
-    seastar::temporary_buffer<char> data);
+    std::optional<ParserError> parseMessage (seastar::temporary_buffer<char> data);
 
     private:
     Client* _client;
@@ -155,6 +153,8 @@ class MessageParser {
     std::optional<std::vector<char>> _buff{};
     ParserError _parserErr;
     PublishArg _publishArg;
+    // for testing
+    seastar::temporary_buffer<char> _prefData;
 
     void reset ();
     std::vector<std::string_view> splitSubcribeArg (const std::span<const char>& data);

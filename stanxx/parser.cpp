@@ -13,6 +13,31 @@
 
 constexpr const int lenCRLF = 2;
 
+std::string quote2 (const std::string& str) {
+    std::ostringstream oss;
+    oss << '"';
+    for (char c : str) {
+        switch (c) {
+        case '\\': oss << "\\\\"; break;
+        case '"': oss << "\\\""; break;
+        case '\n': oss << "\\n"; break;
+        case '\r': oss << "\\r"; break;
+        case '\t': oss << "\\t"; break;
+        default:
+            if (std::isprint (static_cast<unsigned char> (c))) {
+                oss << c;
+            } else {
+                oss << "\\x" << std::hex << std::setw (2) << std::setfill ('0')
+                    << (static_cast<int> (c) & 0xFF);
+            }
+            break;
+        }
+    }
+    oss << '"';
+    return oss.str ();
+}
+
+
 constexpr std::string_view to_string (stanxx::ParseErrorCode code) {
     switch (code) {
     case stanxx::ParseErrorCode::Err_None: return "none";
@@ -129,7 +154,7 @@ void MessageParser::reset () {
     _publishArg.reset ();
 }
 
-seastar::future<std::optional<ParserError>> MessageParser::parseMessage (
+std::optional<ParserError> MessageParser::parseMessage (
 seastar::temporary_buffer<char> data) {
     for (int i = 0; i < data.size (); i++) {
         auto b = data[i];
@@ -321,7 +346,7 @@ seastar::temporary_buffer<char> data) {
             break;
         case EParserState::SUB_ARG:
             switch (b) {
-            case '\r': _drop = i; break;
+            case '\r': _drop = 1; break;
             case '\n': {
                 seastar::temporary_buffer<char> arg;
                 if (!_buff) {
@@ -367,11 +392,11 @@ seastar::temporary_buffer<char> data) {
             break;
         case EParserState::PUB_ARG:
             switch (b) {
-            case '\r': _drop = i; break;
+            case '\r': _drop = 1; break;
             case '\n': {
                 seastar::temporary_buffer<char> arg;
                 if (!_buff) {
-                    auto length = _drop - _start;
+                    auto length = i - _start - _drop;
                     arg = seastar::temporary_buffer<char> (data.get () + _start, length);
                 } else {
                     arg = seastar::temporary_buffer<char> (
@@ -417,6 +442,14 @@ seastar::temporary_buffer<char> data) {
                 }
                 state = EParserState::MSG_END_N;
             } else {
+                /*spdlog::error ("i: {}, length: {}", i, data.size ());
+                if (_buff) {
+                    spdlog::error ("buff: {}",
+                    quote2 (std::string (_buff.value ().begin (), _buff.value ().end ())));
+                }
+                auto prev = _prefData.share (_prefData.size () - 100, 100);
+                spdlog::error (
+                "prev: {}", quote2 (std::string (prev.begin (), prev.end ())));*/
                 _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
@@ -444,14 +477,24 @@ seastar::temporary_buffer<char> data) {
         }
         }
     }
+    if (state == EParserState::CONNECT_ARG || state == EParserState::SUB_ARG ||
+    state == EParserState::PUB_ARG) {
+        if (!_buff) {
+            _buff = std::vector<char> (
+            data.get () + _start, data.get () + data.size () - _drop);
+        }
+    }
     if (state == EParserState::MSG_PAYLOAD) {
         if (!_buff) {
             _buff = std::vector<char> (data.get () + _start, data.get () + data.size ());
-        } /*else {
+        } else {
             _buff.value ().insert (_buff.value ().end (), data.get () + _start,
             data.get () + data.size ());
-        }*/
+        }
     }
+
+    _prefData = data.share ();
+
     co_return std::nullopt;
 }
 
