@@ -1,5 +1,6 @@
 #pragma once
 
+#include "transport.h"
 #include <boost/intrusive/list_hook.hpp>
 #include <seastar/core/gate.hh>
 #include <seastar/core/iostream.hh>
@@ -13,38 +14,33 @@
 
 namespace stanxx {
 
-class Server;
+class ClusteredSubscriberManager;
 class TransportTcp;
-class Connection;
+class ConnectionTcp;
 
-using handler_t = std::function<seastar::future<> (Connection* connection)>;
-
-class Connection : public boost::intrusive::list_base_hook<> {
+class ConnectionTcp : public Connection, public boost::intrusive::list_base_hook<> {
     public:
-    Connection (TransportTcp* server, seastar::connected_socket&& fd);
-    ~Connection ();
+    ConnectionTcp (TransportTcp* server, seastar::connected_socket&& fd);
+    ~ConnectionTcp ();
 
-    seastar::future<> process (handler_t handler);
+    seastar::future<> run ();
     void shutdown_input ();
     seastar::future<> close ();
-    seastar::future<seastar::temporary_buffer<char>> read ();
-    seastar::future<> write (seastar::temporary_buffer<char> data);
-    seastar::future<> flush ();
-    inline std::string id () const noexcept {
+    seastar::future<seastar::temporary_buffer<char>> read () override;
+    seastar::future<> write (seastar::temporary_buffer<char> data) override;
+    inline std::string id () const noexcept override {
         return _id;
     }
-    inline int cpuId () const noexcept {
+    inline int cpuId () const noexcept override {
         return _cpuId;
     }
 
     protected:
     seastar::future<> read_loop ();
-    seastar::future<seastar::stop_iteration> read_one ();
     seastar::future<> write_loop ();
-    void on_new_connection ();
 
     private:
-    TransportTcp* _server;
+    TransportTcp* _server{};
     std::string _id{};
     int _cpuId{};
     seastar::input_stream<char> _read_buf;
@@ -53,21 +49,24 @@ class Connection : public boost::intrusive::list_base_hook<> {
     seastar::queue<seastar::temporary_buffer<char>> _output_buffer{ 512 };
 };
 
-class TransportTcp {
+class TransportTcp : public Transport {
     public:
-    TransportTcp (Server* server);
+    TransportTcp (ClusteredSubscriberManager* _subscriberManager);
     ~TransportTcp ();
-    seastar::future<> listen (const std::string& address, int port);
-    seastar::future<> stop ();
+    seastar::future<> listen (const std::string& address, int port) override;
+    seastar::future<> close () override;
+    seastar::future<> stop () override;
 
-    friend class Connection;
+    friend class ConnectionTcp;
 
     private:
     int _cpuId;
-    Server* _server;
-    boost::intrusive::list<Connection> _connections;
-    seastar::server_socket listener;
-    seastar::gate gate;
+    ClusteredSubscriberManager* _subscriberManager;
+    boost::intrusive::list<ConnectionTcp> _connections;
+    seastar::server_socket _listener;
+    seastar::gate _gate;
+
+    seastar::future<> handleConnection (seastar::accept_result ar);
 };
 
 } // namespace stanxx

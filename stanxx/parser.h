@@ -1,35 +1,26 @@
 #pragma once
 
-#include <memory>
+#include <fmt/format.h>
 #include <optional>
 #include <seastar/core/future.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace stanxx {
 
 class Client;
 
-enum class EParserState {
+enum class EParserState : int {
     OP_START,
     OP_PLUS,
-    OP_PLUS_O,
     OP_PLUS_OK,
     OP_MINUS,
-    OP_MINUS_E,
-    OP_MINUS_ER,
-    OP_MINUS_ERR,
     OP_MINUS_ERR_SPC,
     MINUS_ERR_ARG,
-    OP_C,
-    OP_CO,
-    OP_CON,
-    OP_CONN,
-    OP_CONNE,
-    OP_CONNEC,
     OP_CONNECT,
     CONNECT_ARG,
     OP_H,
@@ -49,10 +40,8 @@ enum class EParserState {
     OP_PUB_SPC,
     PUB_ARG,
     OP_PI,
-    OP_PIN,
     OP_PING,
     OP_PO,
-    OP_PON,
     OP_PONG,
     MSG_PAYLOAD,
     MSG_END_R,
@@ -85,12 +74,52 @@ enum class EParserState {
     OP_MSG,
     OP_MSG_SPC,
     MSG_ARG,
+    OP_INFO,
+    INFO_ARG,
+    OP_ERROR,
+    OP_NONE,
+};
+enum class EParserPlusState : int {
+    OP_PLUS,
+    OP_PLUS_O,
+    OP_PLUS_OK,
+};
+enum class EParserMinusState : int {
+    OP_MINUS,
+    OP_MINUS_E,
+    OP_MINUS_ER,
+    OP_MINUS_ERR,
+    OP_MINUS_ERR_SPC,
+};
+enum class EParserConnectState : int {
+    OP_C,
+    OP_CO,
+    OP_CON,
+    OP_CONN,
+    OP_CONNE,
+    OP_CONNEC,
+    OP_CONNECT,
+};
+enum class EParserPingState : int {
+    OP_PI,
+    OP_PIN,
+    OP_PING,
+};
+enum class EParserPongState : int {
+    OP_PO,
+    OP_PON,
+    OP_PONG,
+};
+enum class EParserPublishState : int {
+    OP_PU,
+    OP_PUB,
+    OP_PUB_SPC,
+};
+enum class EParserInfoState : int {
     OP_I,
     OP_IN,
     OP_INF,
     OP_INFO,
-    INFO_ARG,
-    OP_ERROR,
 };
 
 enum class ParseErrorCode {
@@ -114,21 +143,6 @@ struct ParserError {
     std::string errorString ();
 };
 
-struct ParserState {
-    EParserState state = EParserState::OP_START;
-    int drop{};
-    int start{};
-    std::vector<char> buff{};
-    ParserError parserErr;
-
-    inline void reset () {
-        state = EParserState::OP_START;
-        drop  = 0;
-        start = 0;
-        buff.clear ();
-    }
-};
-
 struct PublishArg {
     std::string subject;
     std::string reply;
@@ -141,6 +155,20 @@ struct PublishArg {
     }
 };
 
+template <typename TState> struct StateTransition {
+    TState next_state;
+    std::array<char, 2> expected_char;
+    inline bool gotExpectedChar (char value) const {
+        int i = 0;
+        while (i < expected_char.size ()) {
+            if (expected_char[i++] == value)
+                return true;
+        }
+        return false;
+    }
+};
+
+
 class MessageParser {
     public:
     MessageParser (Client* client);
@@ -148,16 +176,54 @@ class MessageParser {
     seastar::temporary_buffer<char> data);
 
     private:
-    Client* _client;
-    EParserState state = EParserState::OP_START;
+    Client* _client     = nullptr;
+    EParserState _state = EParserState::OP_START;
+    std::variant<EParserPlusState, EParserMinusState, EParserConnectState, EParserPublishState, EParserInfoState, EParserPingState, EParserPongState> _subState;
+    int _subStateIdx{};
     int _drop{};
     int _start{};
-    std::optional<std::vector<char>> _buff{};
+    bool _buffAvailable{};
+    std::vector<char> _buff{};
     ParserError _parserErr;
     PublishArg _publishArg;
 
     void reset ();
-    std::vector<std::string_view> splitSubcribeArg (const std::span<const char>& data);
-    void parsePublishArg (const std::span<const char>& data);
+    std::vector<std::string_view> splitSubcribeArg (std::span<const char> data);
+    void parsePublishArg (std::string_view data);
+
+    template <typename TState, size_t N>
+    int parseSubStateMachine (std::span<const char> data,
+    int curIndex,
+    const std::array<StateTransition<TState>, N>& transitions,
+    TState finalState,
+    EParserState stateAtFinal) {
+        bool running = true;
+        int j        = 0;
+        auto* state  = &std::get<TState> (_subState);
+
+        const char* p = data.data ();
+        while (running && j < data.size ()) {
+            const auto& transition = transitions[static_cast<int> (*state)];
+
+            if (transition.gotExpectedChar (p[j])) {
+                *state = transition.next_state;
+                j++;
+                if (*state == finalState) {
+                    running = false;
+                    _state  = stateAtFinal;
+                    _start  = curIndex + j;
+                    j--;
+                    break;
+                }
+            } else {
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, _state,
+                fmt::format ("unable to parse sub state: {}", static_cast<int> (*state)));
+                _state  = EParserState::OP_ERROR;
+                running = false;
+                break;
+            }
+        }
+        return j;
+    }
 };
 } // namespace stanxx

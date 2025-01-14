@@ -1,17 +1,18 @@
 #pragma once
 
 #include "parser.h"
-#include "transport_tcp.h"
+#include "transport.h"
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <seastar/core/future.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/core/timer.hh>
+#include <span>
 
 namespace stanxx {
 
-class Connection;
-class SubscriberManagerHandler;
+class ConnectionTcp;
+class ClusteredSubscriberManager;
 
 class RoundTrip {
     public:
@@ -115,7 +116,7 @@ class Client {
     Client (const std::string& id,
     int cpuId,
     Connection* connection,
-    SubscriberManagerHandler* subscriberManagerHandler);
+    ClusteredSubscriberManager* subscriberManager);
     ~Client ();
     seastar::future<> run ();
 
@@ -132,18 +133,23 @@ class Client {
     std::unique_ptr<MessageParser> _parser{};
     RoundTrip _roundTrip{};
     std::shared_ptr<seastar::timer<>> _pingTimer = nullptr;
-    SubscriberManagerHandler* _subscriberManagerHandler;
+    ClusteredSubscriberManager* _subscriberManager;
 
-    seastar::future<> loopRead ();
-    seastar::future<> processConnect (seastar::temporary_buffer<char> data);
-    seastar::future<> processPing ();
-    seastar::future<> sendPing ();
-    seastar::future<> sendError (const std::string& err);
-    seastar::future<> sendOK ();
-    seastar::future<> processPong ();
-    seastar::future<> processSubscribe (const std::vector<std::string_view>& args);
-    seastar::future<> processPublish (const PublishArg& publishArg,
-    seastar::temporary_buffer<char> data);
-    seastar::future<> sendMessage (seastar::temporary_buffer<char> data);
+#ifdef TEST_BUILD
+    protected:
+#else
+    public:
+#endif
+    virtual seastar::future<> processError (std::string_view errString);
+    virtual seastar::future<> processConnect (std::span<const char> data);
+    virtual seastar::future<> processPing ();
+    virtual seastar::future<> sendPing ();
+    virtual seastar::future<> sendError (const std::string& err);
+    virtual seastar::future<> sendOK ();
+    virtual seastar::future<> processPong ();
+    virtual seastar::future<> processSubscribe (const std::vector<std::string_view>& args);
+    virtual seastar::future<>
+    processPublish (const PublishArg& publishArg, std::span<const char> data);
+    virtual seastar::future<> sendMessage (seastar::temporary_buffer<char> data);
 };
 } // namespace stanxx

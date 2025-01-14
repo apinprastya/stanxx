@@ -2,14 +2,16 @@
 #include "buffer.h"
 #include "server.h"
 #include "subscriber.h"
-#include "transport_tcp.h"
+#include <iostream>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>
+#include <seastar/core/coroutine.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/loop.hh>
+#include <seastar/core/shard_id.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/when_all.hh>
 #include <spdlog/spdlog.h>
@@ -41,14 +43,13 @@ std::string quote (const std::string& str) {
 
 namespace stanxx {
 
-Client::Client (const std::string& id, int cpuId, Connection* connection, SubscriberManagerHandler* subscriberManagerHandler)
+Client::Client (const std::string& id, int cpuId, Connection* connection, ClusteredSubscriberManager* subscriberManager)
 : _id (id), _cpuId (cpuId), _connection (connection),
-  _subscriberManagerHandler (subscriberManagerHandler) {
+  _subscriberManager (subscriberManager) {
     _parser = std::make_unique<MessageParser> (this);
 }
 
 Client::~Client () {
-    _subscriberManagerHandler->getSubscriberManager ()->unsubscribeClientId (_id);
     if (_pingTimer) {
         _pingTimer->cancel ();
         _pingTimer = nullptr;
@@ -68,46 +69,43 @@ seastar::future<> Client::run () {
         "true,\"max_payload\" : "
         "1048576,\"client_id\":5,\"client_ip\":\"127.0.0.1\",\"xkey\":"
         "\"XBRNVBBFW45EB3RA7JI3D6HU6ROXESE2EU2IXXTWYOCENKIGI5AW2GU2\"}\r\n";
-        (void)_connection->write (seastar::temporary_buffer<char> (data, strlen (data)));
-        return loopRead ();
-    }
-    return seastar::make_exception_future (
-    std::runtime_error ("connection is null"));
-}
-
-seastar::future<> Client::loopRead () {
-    return seastar::repeat ([this] () {
-        return _connection->read ().then ([this] (seastar::temporary_buffer<char> data) {
-            spdlog::info ("client new data: {}: {}", data.size (),
-            quote (std::string (data.get (), data.size ())));
-            if (data.size () == 0) {
-                return seastar::make_ready_future<seastar::stop_iteration> (
-                seastar::stop_iteration::yes);
-            }
-            return _parser->parseMessage (std::move (data)).then ([this] (auto result) {
+        co_await _connection->write (
+        seastar::temporary_buffer<char> (data, strlen (data)));
+        try {
+            while (true) {
+                auto data = co_await _connection->read ();
+                if (data.size () == 0) {
+                    break;
+                }
+                auto result = co_await _parser->parseMessage (std::move (data));
                 if (result.has_value ()) {
                     spdlog::error (
                     "error parsing message: {}", result.value ().errorString ());
                 }
-                return seastar::make_ready_future<seastar::stop_iteration> (
-                seastar::stop_iteration::no);
-            });
-        });
-    });
+            }
+        } catch (const std::exception& e) {
+            spdlog::error ("error reading data: {}", e.what ());
+        }
+    }
+    co_await _subscriberManager->unsubscribeClientId (_id);
 }
 
-seastar::future<> Client::processConnect (seastar::temporary_buffer<char> data) {
-    spdlog::debug ("Connect args: {}", data.get ());
+seastar::future<> Client::processError (std::string_view errString) {
+    spdlog::error ("client id: {}, error message: {}", _id, errString);
+    return seastar::make_ready_future ();
+}
+
+seastar::future<> Client::processConnect (std::span<const char> data) {
+    SPDLOG_DEBUG ("Connect args: {}", data.data ());
 
     auto dataJson = nlohmann::json::parse (data.begin (), data.end (), nullptr, false);
     if (dataJson.is_discarded ()) {
         spdlog::error (
         "unable to parse json: {}", std::string (data.begin (), data.end ()));
-        return seastar::make_exception_future (
-        std::runtime_error ("unable to parse json"));
+        return seastar::make_ready_future<> ();
     }
     auto reqArg = dataJson.get<ClientOpts> ();
-    spdlog::debug ("{} {} {}", reqArg.name, reqArg.lang, reqArg.version);
+    SPDLOG_DEBUG ("{} {} {}", reqArg.name, reqArg.lang, reqArg.version);
 
     if (!_pingTimer) {
         _pingTimer = std::make_shared<seastar::timer<>> ();
@@ -116,91 +114,86 @@ seastar::future<> Client::processConnect (seastar::temporary_buffer<char> data) 
     _pingTimer->set_callback ([this] () { (void)sendPing (); });
     // TODO: set the ping interval from the client opts
     _pingTimer->arm_periodic (std::chrono::seconds{ 5 });
-
     return seastar::make_ready_future<> ();
 }
 
 seastar::future<> Client::processPing () {
-    spdlog::debug ("process ping message");
+    SPDLOG_DEBUG ("process ping message");
     constexpr const char* pongMessage = "PONG\r\n";
     const std::size_t length          = std::strlen (pongMessage);
     return _connection->write (seastar::temporary_buffer<char> (pongMessage, length));
 }
 
 seastar::future<> Client::sendPing () {
-    spdlog::debug ("sending ping");
+    SPDLOG_DEBUG ("sending ping");
     constexpr const char* pongMessage = "PING\r\n";
     const std::size_t length          = std::strlen (pongMessage);
-    return _connection->write (seastar::temporary_buffer<char> (pongMessage, length));
     _roundTrip.setStartToNow ();
+    return _connection->write (seastar::temporary_buffer<char> (pongMessage, length));
 }
 
 seastar::future<> Client::sendError (const std::string& err) {
-    spdlog::debug ("sending error");
+    SPDLOG_DEBUG ("sending error");
     auto messageStr = fmt::format ("-ERR '{}'\r\n", err);
     return _connection->write (
     seastar::temporary_buffer<char> (messageStr.data (), messageStr.size ()));
 }
 
 seastar::future<> Client::sendOK () {
-    spdlog::debug ("sending ok");
+    SPDLOG_DEBUG ("sending ok");
     constexpr const char* pongMessage = "+OK\r\n";
     const std::size_t length          = std::strlen (pongMessage);
     return _connection->write (seastar::temporary_buffer<char> (pongMessage, length));
 }
 
 seastar::future<> Client::processPong () {
-    spdlog::debug ("got pong message");
+    SPDLOG_DEBUG ("got pong message");
     _roundTrip.calculateRrt ();
     return seastar::make_ready_future<> ();
 }
 
 seastar::future<> Client::processSubscribe (const std::vector<std::string_view>& args) {
     if (args.size () == 2)
-        spdlog::debug ("got subscibe message: {} : {}", args[0], args[1]);
+        SPDLOG_DEBUG ("got subscibe message: {} : {}", args[0], args[1]);
     else if (args.size () == 3)
-        spdlog::debug ("got subscibe message: {} : {} : {}", args[0], args[1], args[2]);
-    auto subject    = std::string (args[0]);
-    auto subId      = std::string (args[1]);
-    auto subscriber = std::make_shared<Subscriber> (subject, subId, this);
-    _subscriberManagerHandler->getSubscriberManager ()->addSubscriber (subscriber);
-    return seastar::make_ready_future<> ();
+        SPDLOG_DEBUG ("got subscibe message: {} : {} : {}", args[0], args[1], args[2]);
+    auto subject = std::string (args[0]);
+    auto subId   = std::string (args[1]);
+    co_await _subscriberManager->addSubscriber (
+    subject, subId, seastar::this_shard_id (), this);
 }
 
 seastar::future<> Client::processPublish (const PublishArg& publishArg,
-seastar::temporary_buffer<char> data) {
-    spdlog::debug ("publish subject: {}; reply: {}; data: {}", publishArg.subject,
+std::span<const char> data) {
+    SPDLOG_DEBUG ("publish subject: {}; reply: {}; data: {}", publishArg.subject,
     publishArg.reply, std::string (data.begin (), data.end ()));
-    auto subscribers = _subscriberManagerHandler->getSubscriberManager ()->getSubscriber (
-    publishArg.subject);
-    spdlog::debug ("subscriber length: {}", subscribers.size ());
+    auto subscribers = _subscriberManager->getSubscriber (publishArg.subject);
+    SPDLOG_DEBUG ("subscriber length: {}", subscribers.size ());
     if (subscribers.size () == 0) {
-        return seastar::make_ready_future<> ();
+        co_return;
     }
+    CharBuffer buffer;
     for (const auto& subcriber : subscribers) {
-        CharBuffer buffer;
-        buffer.write ("MSG ");
-        buffer.write (publishArg.subject);
-        buffer.write (" ");
-        buffer.write (subcriber->getId ());
+        buffer.clear ();
+        buffer.reserve (64 * 1024);
+        buffer.write ("MSG ", 4);
+        buffer.write (publishArg.subject.data (), publishArg.subject.size ());
+        buffer.write (" ", 1);
+        buffer.write (subcriber->getId ().data (), subcriber->getId ().size ());
         if (!publishArg.reply.empty ()) {
-            buffer.write (" ");
-            buffer.write (publishArg.reply);
+            buffer.write (" ", 1);
+            buffer.write (publishArg.reply.data (), publishArg.reply.size ());
         }
-        buffer.write (" ");
-        buffer.write (std::to_string (data.size ()));
-        buffer.write ("\r\n");
-        buffer.write (data.get (), data.size ());
-        buffer.write ("\r\n");
-
-        auto bufferStr = buffer.getBuffer ();
-        spdlog::debug (
-        "buffer value: {}", std::string{ bufferStr.begin (), bufferStr.end () });
-        auto& buffData = buffer.getBuffer ();
-        (void)subcriber->getClient ()->sendMessage (
-        seastar::temporary_buffer<char> (buffData.data (), buffData.size ()));
+        buffer.write (" ", 1);
+        auto dataSizeStr = std::to_string (data.size ());
+        buffer.write (dataSizeStr.data (), dataSizeStr.size ());
+        buffer.write ("\r\n", 2);
+        buffer.write (data.data (), data.size ());
+        buffer.write ("\r\n", 2);
+        auto bufferData = std::move (buffer).getBuffer ();
+        (void)_subscriberManager->sendMessage (subcriber,
+        seastar::temporary_buffer<char> (bufferData.data (), bufferData.size ()));
     }
-    return seastar::make_ready_future<> ();
 }
 
 seastar::future<> Client::sendMessage (seastar::temporary_buffer<char> data) {

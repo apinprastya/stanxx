@@ -1,25 +1,23 @@
 #pragma once
 
-#include <memory>
 #include <seastar/core/future.hh>
 #include <string>
 
 namespace stanxx {
 
-class ClientTransport {
+class Connection {
     public:
-    virtual seastar::future<> connect (const std::string& address, int port) = 0;
-    virtual seastar::future<> close () = 0;
-    virtual seastar::future<> read ()  = 0;
-    virtual seastar::future<> write () = 0;
+    virtual std::string id () const noexcept                               = 0;
+    virtual int cpuId () const noexcept                                    = 0;
+    virtual seastar::future<seastar::temporary_buffer<char>> read ()       = 0;
+    virtual seastar::future<> write (seastar::temporary_buffer<char> data) = 0;
 };
 
-class ServerTransport {
+class Transport {
     public:
-    virtual seastar::future<std::shared_ptr<ServerTransport>>
-    listen (const std::string& address, int port) = 0;
-    virtual seastar::future<> close ()            = 0;
-    virtual seastar::future<> accept ()           = 0;
+    virtual seastar::future<> listen (const std::string& address, int port) = 0;
+    virtual seastar::future<> close ()                                      = 0;
+    virtual seastar::future<> stop ()                                       = 0;
 };
 
 } // namespace stanxx
