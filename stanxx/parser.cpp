@@ -3,7 +3,6 @@
 #include <charconv>
 #include <fmt/format.h>
 #include <optional>
-#include <seastar/core/future.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <span>
@@ -245,7 +244,7 @@ seastar::temporary_buffer<char> data) {
                     arg = seastar::temporary_buffer<char> (
                     _buff.value ().data (), _buff.value ().size ());
                 }
-                co_await _client->processConnect (std::move (arg));
+                _client->processConnect (std::move (arg));
                 reset ();
             } break;
             default:
@@ -357,7 +356,7 @@ seastar::temporary_buffer<char> data) {
                     _buff.value ().data (), _buff.value ().size ());
                 }
                 auto subscribeArgs = splitSubcribeArg (arg);
-                co_await _client->processSubscribe (subscribeArgs);
+                _client->processSubscribe (subscribeArgs);
                 reset ();
             } break;
             default:
@@ -466,14 +465,14 @@ seastar::temporary_buffer<char> data) {
                 _buff = std::vector<char> (
                 data.get () + _start, data.get () + _start + _publishArg.length);
             }
-            co_await _client->processPublish (_publishArg,
+            _client->processPublish (_publishArg,
             seastar::temporary_buffer<char> (_buff->data (), _buff->size ()));
             reset ();
             break;
 
         case EParserState::OP_ERROR: {
             reset ();
-            co_return _parserErr;
+            return _parserErr;
         }
         }
     }
@@ -495,7 +494,7 @@ seastar::temporary_buffer<char> data) {
 
     _prefData = data.share ();
 
-    co_return std::nullopt;
+    return std::nullopt;
 }
 
 std::vector<std::string_view> MessageParser::splitSubcribeArg (

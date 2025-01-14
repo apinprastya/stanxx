@@ -1,7 +1,6 @@
 #pragma once
 
 #include <optional>
-#include <seastar/core/future.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <span>
 #include <string>

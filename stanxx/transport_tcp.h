@@ -30,6 +30,7 @@ class Connection : public boost::intrusive::list_base_hook<> {
     seastar::future<seastar::temporary_buffer<char>> read ();
     seastar::future<> write (seastar::temporary_buffer<char> data);
     seastar::future<> flush ();
+    void writeAsync (seastar::temporary_buffer<char> data);
     inline std::string id () const noexcept {
         return _id;
     }

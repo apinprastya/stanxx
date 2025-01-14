@@ -134,20 +134,21 @@ class Client {
     std::shared_ptr<seastar::timer<>> _pingTimer = nullptr;
     SubscriberManagerHandler* _subscriberManagerHandler;
 
-#ifdef TEST_BUILD
-    // protected:
-#else
-#endif
-    public:
     virtual seastar::future<> loopRead ();
-    virtual seastar::future<> processConnect (seastar::temporary_buffer<char> data);
-    virtual seastar::future<> processPing ();
-    virtual seastar::future<> sendPing ();
-    virtual seastar::future<> sendError (const std::string& err);
-    virtual seastar::future<> sendOK ();
-    virtual seastar::future<> processPong ();
-    virtual seastar::future<> processSubscribe (const std::vector<std::string_view>& args);
-    virtual seastar::future<> processPublish (const PublishArg& publishArg,
+
+#ifdef TEST_BUILD
+    protected:
+#else
+    public:
+#endif
+    virtual void processConnect (seastar::temporary_buffer<char> data);
+    virtual void processPing ();
+    virtual void sendPing ();
+    virtual void sendError (const std::string& err);
+    virtual void sendOK ();
+    virtual void processPong ();
+    virtual void processSubscribe (const std::vector<std::string_view>& args);
+    virtual void processPublish (const PublishArg& publishArg,
     seastar::temporary_buffer<char> data);
     virtual seastar::future<> sendMessage (seastar::temporary_buffer<char> data);
 };

@@ -44,6 +44,10 @@ seastar::future<> Connection::flush () {
     return _write_buf.flush ();
 }
 
+void Connection::writeAsync (seastar::temporary_buffer<char> data) {
+    _output_buffer.push ({ std::move (data) });
+}
+
 seastar::future<> Connection::process (handler_t handler) {
     return seastar::when_all (read_loop (), write_loop (), handler (this))
     .discard_result ()
@@ -78,17 +82,13 @@ seastar::future<seastar::stop_iteration> Connection::read_one () {
     return _read_buf.read ()
     .then ([this] (seastar::temporary_buffer<char> data) {
         if (data.size () == 0) {
-            return _input_buffer
-            .push_eventually (seastar::temporary_buffer<char> ())
-            .then ([this] {
-                return seastar::make_ready_future<seastar::stop_iteration> (
-                seastar::stop_iteration::yes);
-            });
-        }
-        return _input_buffer.push_eventually (std::move (data)).then ([] () {
+            _input_buffer.push ({});
             return seastar::make_ready_future<seastar::stop_iteration> (
-            seastar::stop_iteration::no);
-        });
+            seastar::stop_iteration::yes);
+        }
+        _input_buffer.push (std::move (data));
+        return seastar::make_ready_future<seastar::stop_iteration> (
+        seastar::stop_iteration::no);
     })
     .handle_exception ([this] (const std::exception_ptr& e) {
         spdlog::error ("read_loop failed: {}", e);
