@@ -136,12 +136,12 @@ seastar::future<> TransportTcp::listen (const std::string& address, int port) {
     seastar::socket_address sa (seastar::ipv4_addr (address, port));
     seastar::listen_options opts;
     opts.reuse_address = true;
-    listener           = seastar::listen (sa, opts);
+    _listener          = seastar::listen (sa, opts);
     spdlog::info ("listening on {}:{}", address, port);
 
     return seastar::repeat ([this] () {
         spdlog::debug ("waiting for connection");
-        return listener.accept ()
+        return _listener.accept ()
         .then ([this] (seastar::accept_result ar) {
             spdlog::debug ("new connection accepted");
             (void)seastar::do_with (
@@ -166,13 +166,13 @@ seastar::future<> TransportTcp::listen (const std::string& address, int port) {
 
 seastar::future<> TransportTcp::stop () {
     spdlog::info ("closing tcp server");
-    listener.abort_accept ();
+    _listener.abort_accept ();
 
     for (auto&& c : _connections) {
         c.shutdown_input ();
     }
 
-    return gate.close ().then ([this] {
+    return _gate.close ().then ([this] {
         spdlog::debug ("gate closed");
 
         return seastar::parallel_for_each (_connections, [] (Connection& conn) {

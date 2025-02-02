@@ -67,8 +67,8 @@ class TransportTcp {
     int _cpuId;
     Server* _server;
     boost::intrusive::list<Connection> _connections;
-    seastar::server_socket listener;
-    seastar::gate gate;
+    seastar::server_socket _listener;
+    seastar::gate _gate;
 };
 
 } // namespace stanxx

@@ -234,11 +234,11 @@ seastar::temporary_buffer<char> data) {
             break;
         case EParserState::CONNECT_ARG:
             switch (b) {
-            case '\r': _drop = i; break;
+            case '\r': _drop = 1; break;
             case '\n': {
                 seastar::temporary_buffer<char> arg;
                 if (!_buff) {
-                    auto length = _drop - _start;
+                    auto length = i - _drop - _start;
                     arg = seastar::temporary_buffer<char> (data.get () + _start, length);
                 } else {
                     arg = seastar::temporary_buffer<char> (
@@ -349,7 +349,7 @@ seastar::temporary_buffer<char> data) {
             case '\n': {
                 seastar::temporary_buffer<char> arg;
                 if (!_buff) {
-                    auto length = _drop - _start;
+                    auto length = i - _drop - _start;
                     arg = seastar::temporary_buffer<char> (data.get () + _start, length);
                 } else {
                     arg = seastar::temporary_buffer<char> (
