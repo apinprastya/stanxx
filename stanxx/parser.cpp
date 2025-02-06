@@ -3,8 +3,6 @@
 #include <charconv>
 #include <fmt/format.h>
 #include <optional>
-#include <seastar/core/seastar.hh>
-#include <seastar/core/temporary_buffer.hh>
 #include <span>
 #include <spdlog/spdlog.h>
 #include <string_view>
@@ -153,8 +151,7 @@ void MessageParser::reset () {
     _publishArg.reset ();
 }
 
-std::optional<ParserError> MessageParser::parseMessage (
-seastar::temporary_buffer<char> data) {
+std::optional<ParserError> MessageParser::parseMessage (std::span<char> data) {
     for (int i = 0; i < data.size (); i++) {
         auto b = data[i];
         switch (state) {
@@ -236,13 +233,13 @@ seastar::temporary_buffer<char> data) {
             switch (b) {
             case '\r': _drop = 1; break;
             case '\n': {
-                seastar::temporary_buffer<char> arg;
+                std::span<char> arg;
                 if (!_buff) {
                     auto length = i - _drop - _start;
-                    arg = seastar::temporary_buffer<char> (data.get () + _start, length);
+                    arg = std::span<char> (data.data () + _start, length);
                 } else {
-                    arg = seastar::temporary_buffer<char> (
-                    _buff.value ().data (), _buff.value ().size ());
+                    arg =
+                    std::span<char> (_buff.value ().data (), _buff.value ().size ());
                 }
                 _client->processConnect (std::move (arg));
                 reset ();
@@ -347,13 +344,13 @@ seastar::temporary_buffer<char> data) {
             switch (b) {
             case '\r': _drop = 1; break;
             case '\n': {
-                seastar::temporary_buffer<char> arg;
+                std::span<char> arg;
                 if (!_buff) {
                     auto length = i - _drop - _start;
-                    arg = seastar::temporary_buffer<char> (data.get () + _start, length);
+                    arg = std::span<char> (data.data () + _start, length);
                 } else {
-                    arg = seastar::temporary_buffer<char> (
-                    _buff.value ().data (), _buff.value ().size ());
+                    arg =
+                    std::span<char> (_buff.value ().data (), _buff.value ().size ());
                 }
                 auto subscribeArgs = splitSubcribeArg (arg);
                 _client->processSubscribe (subscribeArgs);
@@ -396,7 +393,7 @@ seastar::temporary_buffer<char> data) {
                 seastar::temporary_buffer<char> arg;
                 if (!_buff) {
                     auto length = i - _start - _drop;
-                    arg = seastar::temporary_buffer<char> (data.get () + _start, length);
+                    arg = seastar::temporary_buffer<char> (data.data () + _start, length);
                 } else {
                     arg = seastar::temporary_buffer<char> (
                     _buff.value ().data (), _buff.value ().size ());
@@ -424,7 +421,7 @@ seastar::temporary_buffer<char> data) {
                 }
                 if (sizeToCopy > 0) {
                     _buff.value ().insert (_buff.value ().end (),
-                    data.get () + i, data.get () + i + sizeToCopy);
+                    data.data () + i, data.data () + i + sizeToCopy);
                     i = i + sizeToCopy - 1;
                 }
                 if (_buff.value ().size () >= _publishArg.length) {
@@ -462,11 +459,11 @@ seastar::temporary_buffer<char> data) {
             if (_buff) {
                 _buff.value ().push_back (b);
             } else {
-                _buff = std::vector<char> (
-                data.get () + _start, data.get () + _start + _publishArg.length);
+                _buff = std::vector<char> (data.data () + _start,
+                data.data () + _start + _publishArg.length);
             }
-            _client->processPublish (_publishArg,
-            seastar::temporary_buffer<char> (_buff->data (), _buff->size ()));
+            _client->processPublish (
+            _publishArg, std::span<char> (_buff->data (), _buff->size ()));
             reset ();
             break;
 
@@ -480,19 +477,20 @@ seastar::temporary_buffer<char> data) {
     state == EParserState::PUB_ARG) {
         if (!_buff) {
             _buff = std::vector<char> (
-            data.get () + _start, data.get () + data.size () - _drop);
+            data.data () + _start, data.data () + data.size () - _drop);
         }
     }
     if (state == EParserState::MSG_PAYLOAD) {
         if (!_buff) {
-            _buff = std::vector<char> (data.get () + _start, data.get () + data.size ());
+            _buff =
+            std::vector<char> (data.data () + _start, data.data () + data.size ());
         } else {
-            _buff.value ().insert (_buff.value ().end (), data.get () + _start,
-            data.get () + data.size ());
+            _buff.value ().insert (_buff.value ().end (), data.data () + _start,
+            data.data () + data.size ());
         }
     }
 
-    _prefData = data.share ();
+    _prevData = std::vector (data.begin (), data.end ());
 
     return std::nullopt;
 }

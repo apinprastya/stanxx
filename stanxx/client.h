@@ -2,11 +2,10 @@
 
 #include "parser.h"
 #include "transport_tcp.h"
+#include <asio/awaitable.hpp>
 #include <memory>
 #include <nlohmann/json.hpp>
-#include <seastar/core/future.hh>
-#include <seastar/core/temporary_buffer.hh>
-#include <seastar/core/timer.hh>
+#include <span>
 
 namespace stanxx {
 
@@ -117,7 +116,8 @@ class Client {
     Connection* connection,
     SubscriberManagerHandler* subscriberManagerHandler);
     ~Client ();
-    seastar::future<> run ();
+    asio::awaitable<void> run ();
+    void read (std::span<char> data);
 
     inline const std::string& getId () const {
         return _id;
@@ -131,25 +131,23 @@ class Client {
     Connection* _connection;
     std::unique_ptr<MessageParser> _parser{};
     RoundTrip _roundTrip{};
-    std::shared_ptr<seastar::timer<>> _pingTimer = nullptr;
     SubscriberManagerHandler* _subscriberManagerHandler;
 
-    virtual seastar::future<> loopRead ();
+    virtual asio::awaitable<void> loopRead ();
 
 #ifdef TEST_BUILD
     protected:
 #else
     public:
 #endif
-    virtual void processConnect (seastar::temporary_buffer<char> data);
+    virtual void processConnect (std::span<char> data);
     virtual void processPing ();
     virtual void sendPing ();
     virtual void sendError (const std::string& err);
     virtual void sendOK ();
     virtual void processPong ();
     virtual void processSubscribe (const std::vector<std::string_view>& args);
-    virtual void processPublish (const PublishArg& publishArg,
-    seastar::temporary_buffer<char> data);
-    virtual seastar::future<> sendMessage (seastar::temporary_buffer<char> data);
+    virtual void processPublish (const PublishArg& publishArg, std::span<char> data);
+    virtual void sendMessage (const std::span<const char>& data);
 };
 } // namespace stanxx

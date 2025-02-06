@@ -1,6 +1,12 @@
 #pragma once
 
+#include <asio.hpp>
+#include <asio/awaitable.hpp>
+#include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
 #include <boost/intrusive/list_hook.hpp>
+#include <memory>
+#include <queue>
 #include <seastar/core/gate.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/queue.hh>
@@ -8,6 +14,7 @@
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/net/api.hh>
 #include <spdlog/spdlog.h>
+#include <vector>
 
 #define QUEUE_SIZE 512
 
@@ -17,58 +24,39 @@ class Server;
 class TransportTcp;
 class Connection;
 
-using handler_t = std::function<seastar::future<> (Connection* connection)>;
+using handler_t = std::function<asio::awaitable<void> (Connection* connection)>;
 
 class Connection : public boost::intrusive::list_base_hook<> {
     public:
-    Connection (TransportTcp* server, seastar::connected_socket&& fd);
+    Connection (TransportTcp* server, asio::ip::tcp::socket&& socket);
     ~Connection ();
+    void queue (std::vector<char>&& data);
 
-    seastar::future<> process (handler_t handler);
-    void shutdown_input ();
-    seastar::future<> close ();
-    seastar::future<seastar::temporary_buffer<char>> read ();
-    seastar::future<> write (seastar::temporary_buffer<char> data);
-    seastar::future<> flush ();
-    void writeAsync (seastar::temporary_buffer<char> data);
-    inline std::string id () const noexcept {
-        return _id;
-    }
-    inline int cpuId () const noexcept {
-        return _cpuId;
-    }
-
-    protected:
-    seastar::future<> read_loop ();
-    seastar::future<seastar::stop_iteration> read_one ();
-    seastar::future<> write_loop ();
-    void on_new_connection ();
+    asio::awaitable<void> runWritePending ();
 
     private:
     TransportTcp* _server;
-    std::string _id{};
-    int _cpuId{};
-    seastar::input_stream<char> _read_buf;
-    seastar::output_stream<char> _write_buf;
-    seastar::queue<seastar::temporary_buffer<char>> _input_buffer{ 512 };
-    seastar::queue<seastar::temporary_buffer<char>> _output_buffer{ 512 };
+    asio::ip::tcp::socket _socket;
+    std::queue<std::vector<char>> _writeQueue;
+
+    friend class TransportTcp;
 };
 
 class TransportTcp {
     public:
-    TransportTcp (Server* server);
+    TransportTcp (Server* server, asio::io_context* ioContext);
     ~TransportTcp ();
-    seastar::future<> listen (const std::string& address, int port);
-    seastar::future<> stop ();
+    asio::awaitable<void> listen (const std::string& address, int port);
+    asio::awaitable<void> stop ();
 
     friend class Connection;
 
     private:
-    int _cpuId;
     Server* _server;
+    asio::io_context* _ioContext;
     boost::intrusive::list<Connection> _connections;
-    seastar::server_socket _listener;
-    seastar::gate _gate;
+
+    asio::awaitable<void> handleConnection (asio::ip::tcp::socket&& socket);
 };
 
 } // namespace stanxx

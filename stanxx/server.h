@@ -2,12 +2,9 @@
 
 #include "transport_tcp.h"
 
+#include <asio.hpp>
 #include <memory>
 #include <nlohmann/json.hpp>
-#include <seastar/core/app-template.hh>
-#include <seastar/core/future.hh>
-#include <seastar/core/sharded.hh>
-#include <seastar/net/api.hh>
 
 namespace stanxx {
 
@@ -57,8 +54,7 @@ class Server : public SubscriberManagerHandler {
     }
 
     private:
-    seastar::app_template app;
-    seastar::sharded<TransportTcp> mainTransport;
+    asio::io_context _ioContext;
     std::unique_ptr<SubscriberManager> _subscribeManager;
 };
 } // namespace stanxx

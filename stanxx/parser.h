@@ -142,7 +142,7 @@ struct PublishArg {
 class MessageParser {
     public:
     MessageParser (Client* client);
-    std::optional<ParserError> parseMessage (seastar::temporary_buffer<char> data);
+    std::optional<ParserError> parseMessage (std::span<char> data);
 
     private:
     Client* _client;
@@ -153,7 +153,7 @@ class MessageParser {
     ParserError _parserErr;
     PublishArg _publishArg;
     // for testing
-    seastar::temporary_buffer<char> _prefData;
+    std::vector<char> _prevData;
 
     void reset ();
     std::vector<std::string_view> splitSubcribeArg (const std::span<const char>& data);

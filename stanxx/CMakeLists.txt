@@ -9,6 +9,7 @@ find_package(Seastar REQUIRED)
 find_package(Valgrind REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(Boost REQUIRED)
+find_package(Threads REQUIRED)
 
 add_library(${PROJECT_NAME} STATIC
     server.cpp
@@ -20,4 +21,4 @@ add_library(${PROJECT_NAME} STATIC
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(${PROJECT_NAME} Seastar::seastar spdlog::spdlog ${Boost_LIBRARIES})
+target_link_libraries(${PROJECT_NAME} Seastar::seastar spdlog::spdlog ${Boost_LIBRARIES} Threads::Threads)

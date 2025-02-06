@@ -1,145 +1,118 @@
 #include "transport_tcp.h"
 #include "client.h"
 #include "server.h"
+#include <asio/as_tuple.hpp>
+#include <asio/awaitable.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/post.hpp>
+#include <asio/steady_timer.hpp>
+#include <asio/this_coro.hpp>
+#include <asio/use_awaitable.hpp>
+#include <asio/write.hpp>
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
-#include <memory>
-#include <seastar/core/do_with.hh>
-#include <seastar/core/future.hh>
-#include <seastar/core/gate.hh>
-#include <seastar/core/loop.hh>
-#include <seastar/core/reactor.hh>
-#include <seastar/core/seastar.hh>
-#include <seastar/core/temporary_buffer.hh>
-#include <seastar/core/when_all.hh>
-#include <seastar/net/socket_defs.hh>
+#include <chrono>
 #include <spdlog/spdlog.h>
 
 static boost::uuids::random_generator generator;
 
 namespace stanxx {
 
-Connection::Connection (TransportTcp* server, seastar::connected_socket&& fd)
-: _server (server) {
-    //_fd        = std::move (fd);
-    _read_buf  = std::move (fd.input ());
-    _write_buf = std::move (fd.output ());
-    auto uuid  = generator ();
-    _id        = boost::uuids::to_string (uuid);
-    _cpuId     = seastar::this_shard_id ();
-
-    on_new_connection ();
-}
-
-seastar::future<seastar::temporary_buffer<char>> Connection::read () {
-    return _input_buffer.pop_eventually ();
-}
-
-seastar::future<> Connection::write (seastar::temporary_buffer<char> data) {
-    return _output_buffer.push_eventually (std::move (data));
-}
-
-seastar::future<> Connection::flush () {
-    return _write_buf.flush ();
-}
-
-void Connection::writeAsync (seastar::temporary_buffer<char> data) {
-    _output_buffer.push ({ std::move (data) });
-}
-
-seastar::future<> Connection::process (handler_t handler) {
-    return seastar::when_all (read_loop (), write_loop (), handler (this))
-    .discard_result ()
-    .handle_exception ([] (const std::exception_ptr& e) {
-        spdlog::error ("processing failed: {}", e);
-    })
-    .finally ([] () { spdlog::info ("connection process ends"); });
-}
-
-void Connection::shutdown_input () {
-}
-
-seastar::future<> Connection::close () {
-    return seastar::make_ready_future ();
+Connection::Connection (TransportTcp* server, asio::ip::tcp::socket&& socket)
+: _server (server), _socket (std::move (socket)) {
 }
 
 Connection::~Connection () {
-    spdlog::info ("connection {} destroyed", _id);
-    if (_server != nullptr)
-        _server->_connections.erase (_server->_connections.iterator_to (*this));
+    spdlog::debug ("connection destroyed");
 }
 
-seastar::future<> Connection::read_loop () {
-    spdlog::debug ("reading loop");
-    return seastar::repeat ([this] { return read_one (); }).finally ([this] () {
-        _output_buffer.push ({});
-        return _read_buf.close ();
-    });
+void Connection::queue (std::vector<char>&& data) {
+    _writeQueue.push (std::move (data));
 }
 
-seastar::future<seastar::stop_iteration> Connection::read_one () {
-    return _read_buf.read ()
-    .then ([this] (seastar::temporary_buffer<char> data) {
-        if (data.size () == 0) {
-            _input_buffer.push ({});
-            return seastar::make_ready_future<seastar::stop_iteration> (
-            seastar::stop_iteration::yes);
+asio::awaitable<void> Connection::runWritePending () {
+    spdlog::debug ("run write pending");
+    while (true) {
+        if (_writeQueue.empty ()) {
+            asio::steady_timer timer (
+            co_await asio::this_coro::executor, std::chrono::milliseconds (1));
+            spdlog::debug ("write queue empty");
+            co_await timer.async_wait (asio::use_awaitable);
+            spdlog::debug ("write queue empty 123");
+            continue;
         }
-        _input_buffer.push (std::move (data));
-        return seastar::make_ready_future<seastar::stop_iteration> (
-        seastar::stop_iteration::no);
-    })
-    .handle_exception ([this] (const std::exception_ptr& e) {
-        spdlog::error ("read_loop failed: {}", e);
-        return _input_buffer
-        .push_eventually (seastar::temporary_buffer<char> ())
-        .then ([this] {
-            return seastar::make_ready_future<seastar::stop_iteration> (
-            seastar::stop_iteration::yes);
-        });
-    });
+        auto data = std::move (_writeQueue.front ());
+        _writeQueue.pop ();
+        co_await _socket.async_send (asio::buffer (data), asio::use_awaitable);
+    }
 }
 
-seastar::future<> Connection::write_loop () {
-    return seastar::repeat ([this] () {
-        return _output_buffer.pop_eventually ().then (
-        [this] (seastar::temporary_buffer<char> data) {
-            if (data.size () == 0) {
-                return seastar::make_ready_future<seastar::stop_iteration> (
-                seastar::stop_iteration::yes);
-            }
-            return _write_buf.write (std::move (data)).then ([this] {
-                return _write_buf.flush ().then ([this] () {
-                    return seastar::make_ready_future<seastar::stop_iteration> (
-                    seastar::stop_iteration::no);
-                });
-            });
-        });
-    })
-    .finally ([this] () { return _write_buf.close (); });
-}
-
-void Connection::on_new_connection () {
-    if (_server != nullptr)
-        _server->_connections.push_back (*this);
-}
-
-TransportTcp::TransportTcp (Server* server) : _server (server) {
+TransportTcp::TransportTcp (Server* server, asio::io_context* ioContext)
+: _server (server), _ioContext (ioContext) {
 }
 
 TransportTcp::~TransportTcp () {
 }
 
-seastar::future<> TransportTcp::listen (const std::string& address, int port) {
-    _cpuId = seastar::this_shard_id ();
-    seastar::socket_address sa (seastar::ipv4_addr (address, port));
-    seastar::listen_options opts;
-    opts.reuse_address = true;
-    _listener          = seastar::listen (sa, opts);
-    spdlog::info ("listening on {}:{}", address, port);
 
-    return seastar::repeat ([this] () {
+asio::awaitable<void> TransportTcp::handleConnection (asio::ip::tcp::socket&& socket) {
+    spdlog::debug ("new connection");
+    Connection connection (this, std::move (socket));
+    Client client ("", 0, &connection, _server);
+    asio::co_spawn (connection._socket.get_executor (),
+    connection.runWritePending (), asio::detached);
+    // co_await socket.async_wait (socket.wait_write, asio::use_awaitable);
+    static char* welcomeData =
+    "INFO "
+    "{\"server_id\":"
+    "\"NCEUKVMQR4KCNGMKEAIEFS5OF4VMI34DXCTZ5HBFR4YSLETPHFDEWIRQ\",\"server_"
+    "name\":\"NCEUKVMQR4KCNGMKEAIEFS5OF4VMI34DXCTZ5HBFR4YSLETPHFDEWIRQ\","
+    "\"version\":\"2.11.0-dev\",\"proto\" : 1,\"go\" : "
+    "\"go1.23.3\",\"host\" : \"0.0.0.0\",\"port\" : 4222,\"headers\" : "
+    "true,\"max_payload\" : "
+    "1048576,\"client_id\":5,\"client_ip\":\"127.0.0.1\",\"xkey\":"
+    "\"XBRNVBBFW45EB3RA7JI3D6HU6ROXESE2EU2IXXTWYOCENKIGI5AW2GU2\"}\r\n";
+    auto [ec, xx] = co_await connection._socket.async_send (
+    asio::buffer (welcomeData, std::strlen (welcomeData)),
+    asio::as_tuple (asio::use_awaitable));
+    if (ec) {
+        spdlog::info ("send info error: {}", ec.message ());
+        co_return;
+    }
+    char data[512];
+    while (true) {
+        auto [ec, length] = co_await connection._socket.async_read_some (
+        asio::buffer (data), asio::as_tuple (asio::use_awaitable));
+        if (ec) {
+            if (ec != asio::error::eof)
+                spdlog::error ("read error: {}", ec.message ());
+            break;
+        }
+        client.read (std::span<char> (data, length));
+    }
+    spdlog::debug ("end handle connection");
+}
+
+asio::awaitable<void> TransportTcp::listen (const std::string& address, int port) {
+    spdlog::info ("listening on {}:{}", address, port);
+    asio::ip::tcp::acceptor acceptor (
+    *_ioContext, asio::ip::tcp::endpoint (asio::ip::tcp::v4 (), port));
+    while (true) {
+        auto [ec, socket] =
+        co_await acceptor.async_accept (asio::as_tuple (asio::use_awaitable));
+        if (ec) {
+            spdlog::error ("Accept error: {}", ec.message ());
+            continue;
+        }
+        socket.non_blocking (true);
+        socket.set_option (asio::ip::tcp::no_delay (true));
+        asio::co_spawn (acceptor.get_executor (),
+        handleConnection (std::move (socket)), asio::detached);
+    }
+
+
+    /*return seastar::repeat ([this] () {
         spdlog::debug ("waiting for connection");
         return _listener.accept ()
         .then ([this] (seastar::accept_result ar) {
@@ -147,10 +120,9 @@ seastar::future<> TransportTcp::listen (const std::string& address, int port) {
             (void)seastar::do_with (
             std::make_unique<Connection> (this, std::move (ar.connection)),
             [this] (auto& conn) {
-                return conn->process ([&conn, this] (Connection* connection) mutable {
-                    return seastar::do_with (
-                    std::make_unique<Client> (connection->id (),
-                    connection->cpuId (), connection, _server),
+                return conn->process ([&conn, this] (Connection* connection)
+    mutable { return seastar::do_with ( std::make_unique<Client> (connection->id
+    (), connection->cpuId (), connection, _server),
                     [] (auto& client) { return client->run (); });
                 });
             });
@@ -161,24 +133,17 @@ seastar::future<> TransportTcp::listen (const std::string& address, int port) {
             return seastar::make_ready_future<seastar::stop_iteration> (
             seastar::stop_iteration::yes);
         });
-    });
+    });*/
 }
 
-seastar::future<> TransportTcp::stop () {
+asio::awaitable<void> TransportTcp::stop () {
     spdlog::info ("closing tcp server");
-    _listener.abort_accept ();
+    //_listener.abort_accept ();
 
-    for (auto&& c : _connections) {
+    /*for (auto&& c : _connections) {
         c.shutdown_input ();
-    }
-
-    return _gate.close ().then ([this] {
-        spdlog::debug ("gate closed");
-
-        return seastar::parallel_for_each (_connections, [] (Connection& conn) {
-            return conn.close ().handle_exception ([] (auto ignored) {});
-        });
-    });
+    }*/
+    co_return;
 }
 
 } // namespace stanxx
