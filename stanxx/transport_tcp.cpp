@@ -80,7 +80,7 @@ asio::awaitable<void> TransportTcp::handleConnection (asio::ip::tcp::socket&& so
         spdlog::info ("send info error: {}", ec.message ());
         co_return;
     }
-    char data[512];
+    char data[4096];
     while (true) {
         auto [ec, length] = co_await connection._socket.async_read_some (
         asio::buffer (data), asio::as_tuple (asio::use_awaitable));

@@ -69,8 +69,8 @@ asio::awaitable<void> Client::loopRead () {
 }
 
 void Client::read (std::span<char> data) {
-    spdlog::debug ("client new data: {}: {}", data.size (),
-    quote (std::string (data.data (), data.size ())));
+    /*spdlog::debug ("client new data: {}: {}", data.size (),
+    quote (std::string (data.data (), data.size ())));*/
     auto result = _parser->parseMessage (data);
     if (result.has_value ()) {
         spdlog::error ("error parsing message: {}", result.value ().errorString ());
@@ -170,12 +170,12 @@ void Client::processPublish (const PublishArg& publishArg, std::span<char> data)
         auto bufferStr = buffer.getBuffer ();
         spdlog::debug (
         "buffer value: {}", std::string{ bufferStr.begin (), bufferStr.end () });
-        (void)subcriber->getClient ()->sendMessage (buffer.getBuffer ());
+        subcriber->getClient ()->sendMessage (buffer.getBuffer ());
     }
 }
 
 void Client::sendMessage (const std::span<const char>& data) {
-    //_connection->write (std::move (data));
+    _connection->queue (std::vector<char> (data.begin (), data.end ()));
 }
 
 } // namespace stanxx

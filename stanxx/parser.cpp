@@ -152,6 +152,7 @@ void MessageParser::reset () {
 }
 
 std::optional<ParserError> MessageParser::parseMessage (std::span<char> data) {
+    // spdlog::info ("message: {}", quote2 (std::string (data.begin (), data.end ())));
     for (int i = 0; i < data.size (); i++) {
         auto b = data[i];
         switch (state) {
@@ -390,21 +391,22 @@ std::optional<ParserError> MessageParser::parseMessage (std::span<char> data) {
             switch (b) {
             case '\r': _drop = 1; break;
             case '\n': {
-                seastar::temporary_buffer<char> arg;
+                std::span<char> arg;
                 if (!_buff) {
                     auto length = i - _start - _drop;
-                    arg = seastar::temporary_buffer<char> (data.data () + _start, length);
+                    arg = std::span<char> (data.data () + _start, length);
                 } else {
-                    arg = seastar::temporary_buffer<char> (
-                    _buff.value ().data (), _buff.value ().size ());
+                    arg =
+                    std::span<char> (_buff.value ().data (), _buff.value ().size ());
                 }
                 parsePublishArg (arg);
                 _start = i + 1;
                 _drop  = 0;
                 state  = EParserState::MSG_PAYLOAD;
-                if (!_buff) {
+                _buff  = std::nullopt;
+                /*if (!_buff) {
                     i = _start + _publishArg.length - lenCRLF;
-                }
+                }*/
             } break;
             default:
                 if (_buff)
@@ -438,14 +440,6 @@ std::optional<ParserError> MessageParser::parseMessage (std::span<char> data) {
                 }
                 state = EParserState::MSG_END_N;
             } else {
-                /*spdlog::error ("i: {}, length: {}", i, data.size ());
-                if (_buff) {
-                    spdlog::error ("buff: {}",
-                    quote2 (std::string (_buff.value ().begin (), _buff.value ().end ())));
-                }
-                auto prev = _prefData.share (_prefData.size () - 100, 100);
-                spdlog::error (
-                "prev: {}", quote2 (std::string (prev.begin (), prev.end ())));*/
                 _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
                 state = EParserState::OP_ERROR;
             }
