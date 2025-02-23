@@ -141,21 +141,23 @@ struct PublishArg {
 class MessageParser {
     public:
     MessageParser (Client* client);
-    std::optional<ParserError> parseMessage (std::span<char> data);
+    std::optional<ParserError> parseMessage (const std::span<const char>& data);
 
     private:
+    static constexpr size_t INITIAL_BUFFER_SIZE = 64 * 1024; // 64KB
     Client* _client;
     EParserState state = EParserState::OP_START;
     int _drop{};
     int _start{};
-    std::optional<std::vector<char>> _buff{};
+    bool _buffAvailable;
+    std::vector<char> _buff{};
     ParserError _parserErr;
     PublishArg _publishArg;
     // for testing
-    std::vector<char> _prevData;
+    // std::vector<char> _prevData;
 
     void reset ();
     std::vector<std::string_view> splitSubcribeArg (const std::span<const char>& data);
-    void parsePublishArg (const std::span<const char>& data);
+    void parsePublishArg (std::string_view data);
 };
 } // namespace stanxx

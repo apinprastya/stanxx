@@ -117,7 +117,7 @@ class Client {
     SubscriberManagerHandler* subscriberManagerHandler);
     ~Client ();
     asio::awaitable<void> run ();
-    void read (std::span<char> data);
+    void read (const std::span<char>& data);
 
     inline const std::string& getId () const {
         return _id;
@@ -140,14 +140,15 @@ class Client {
 #else
     public:
 #endif
-    virtual void processConnect (std::span<char> data);
+    virtual void processConnect (const std::span<const char>& data);
     virtual void processPing ();
     virtual void sendPing ();
     virtual void sendError (const std::string& err);
     virtual void sendOK ();
     virtual void processPong ();
     virtual void processSubscribe (const std::vector<std::string_view>& args);
-    virtual void processPublish (const PublishArg& publishArg, std::span<char> data);
-    virtual void sendMessage (const std::span<const char>& data);
+    virtual void processPublish (const PublishArg& publishArg,
+    const std::span<const char>& data);
+    virtual void sendMessage (std::vector<char>&& data);
 };
 } // namespace stanxx

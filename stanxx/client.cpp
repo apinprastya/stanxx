@@ -68,16 +68,21 @@ asio::awaitable<void> Client::run () {
 asio::awaitable<void> Client::loopRead () {
 }
 
-void Client::read (std::span<char> data) {
-    /*spdlog::debug ("client new data: {}: {}", data.size (),
-    quote (std::string (data.data (), data.size ())));*/
+void Client::read (const std::span<char>& data) {
+    spdlog::debug ("client new data: {}: {}", data.size (),
+    quote (std::string (data.data (), data.size ())));
+    auto start  = std::chrono::high_resolution_clock::now ();
     auto result = _parser->parseMessage (data);
     if (result.has_value ()) {
         spdlog::error ("error parsing message: {}", result.value ().errorString ());
     }
+    auto end = std::chrono::high_resolution_clock::now ();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds> (end - start);
+
+    std::cout << "Execution time: " << duration.count () << " microseconds\n";
 }
 
-void Client::processConnect (std::span<char> data) {
+void Client::processConnect (const std::span<const char>& data) {
     spdlog::debug ("Connect args: {}", data.data ());
 
     auto dataJson = nlohmann::json::parse (data.begin (), data.end (), nullptr, false);
@@ -142,7 +147,8 @@ void Client::processSubscribe (const std::vector<std::string_view>& args) {
     _subscriberManagerHandler->getSubscriberManager ()->addSubscriber (subscriber);
 }
 
-void Client::processPublish (const PublishArg& publishArg, std::span<char> data) {
+void Client::processPublish (const PublishArg& publishArg,
+const std::span<const char>& data) {
     spdlog::debug ("publish subject: {}; reply: {}; data: {}", publishArg.subject,
     publishArg.reply, std::string (data.begin (), data.end ()));
     auto subscribers = _subscriberManagerHandler->getSubscriberManager ()->getSubscriber (
@@ -168,14 +174,14 @@ void Client::processPublish (const PublishArg& publishArg, std::span<char> data)
         buffer.write ("\r\n");
 
         auto bufferStr = buffer.getBuffer ();
-        spdlog::debug (
+        spdlog::info (
         "buffer value: {}", std::string{ bufferStr.begin (), bufferStr.end () });
-        subcriber->getClient ()->sendMessage (buffer.getBuffer ());
+        subcriber->getClient ()->sendMessage (std::move (buffer.getBuffer ()));
     }
 }
 
-void Client::sendMessage (const std::span<const char>& data) {
-    _connection->queue (std::vector<char> (data.begin (), data.end ()));
+void Client::sendMessage (std::vector<char>&& data) {
+    _connection->queue (std::move (data));
 }
 
 } // namespace stanxx

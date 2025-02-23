@@ -30,7 +30,7 @@ class CharBuffer {
         buffer.insert (buffer.end (), data.begin (), data.end ());
     }
 
-    const std::vector<char>& getBuffer () const {
+    std::vector<char>& getBuffer () {
         return buffer;
     }
 

@@ -19,33 +19,50 @@ static boost::uuids::random_generator generator;
 
 namespace stanxx {
 
-Connection::Connection (TransportTcp* server, asio::ip::tcp::socket&& socket)
-: _server (server), _socket (std::move (socket)) {
+Connection::Connection (TransportTcp* server, asio::ip::tcp::socket&& socket, asio::io_context* ioContext)
+: _server (server), _socket (std::move (socket)),
+  _timer (asio::steady_timer (*ioContext)), _ioContext (ioContext) {
 }
 
 Connection::~Connection () {
-    spdlog::debug ("connection destroyed");
+    spdlog::info ("connection destroyed");
 }
 
 void Connection::queue (std::vector<char>&& data) {
     _writeQueue.push (std::move (data));
+    /*spdlog::info ("SOME ONE YHER");
+    _timer.cancel_one ();*/
 }
 
 asio::awaitable<void> Connection::runWritePending () {
     spdlog::debug ("run write pending");
-    while (true) {
+    while (_running) {
         if (_writeQueue.empty ()) {
-            asio::steady_timer timer (
-            co_await asio::this_coro::executor, std::chrono::milliseconds (1));
-            spdlog::debug ("write queue empty");
+            asio::steady_timer timer (*_ioContext, std::chrono::milliseconds (1));
+            // spdlog::info ("write queue empty");
             co_await timer.async_wait (asio::use_awaitable);
-            spdlog::debug ("write queue empty 123");
             continue;
         }
         auto data = std::move (_writeQueue.front ());
         _writeQueue.pop ();
         co_await _socket.async_send (asio::buffer (data), asio::use_awaitable);
+
+        /*if (!_writeQueue.empty ()) {
+            auto data = std::move (_writeQueue.front ());
+            _writeQueue.pop ();
+            co_await _socket.async_send (asio::buffer (data),
+        asio::use_awaitable); continue;
+        }
+
+        _timer.expires_after (std::chrono::milliseconds (1)); // Long timeout
+        spdlog::info ("sleeping beauty");
+        co_await _timer.async_wait (asio::use_awaitable);
+        spdlog::info ("sleeping beauty 2");*/
     }
+}
+
+void Connection::stop () {
+    _running = false;
 }
 
 TransportTcp::TransportTcp (Server* server, asio::io_context* ioContext)
@@ -58,7 +75,7 @@ TransportTcp::~TransportTcp () {
 
 asio::awaitable<void> TransportTcp::handleConnection (asio::ip::tcp::socket&& socket) {
     spdlog::debug ("new connection");
-    Connection connection (this, std::move (socket));
+    Connection connection (this, std::move (socket), _ioContext);
     Client client ("", 0, &connection, _server);
     asio::co_spawn (connection._socket.get_executor (),
     connection.runWritePending (), asio::detached);
@@ -80,8 +97,9 @@ asio::awaitable<void> TransportTcp::handleConnection (asio::ip::tcp::socket&& so
         spdlog::info ("send info error: {}", ec.message ());
         co_return;
     }
-    char data[4096];
+    char data[65535];
     while (true) {
+        auto start        = std::chrono::high_resolution_clock::now ();
         auto [ec, length] = co_await connection._socket.async_read_some (
         asio::buffer (data), asio::as_tuple (asio::use_awaitable));
         if (ec) {
@@ -89,8 +107,14 @@ asio::awaitable<void> TransportTcp::handleConnection (asio::ip::tcp::socket&& so
                 spdlog::error ("read error: {}", ec.message ());
             break;
         }
+        auto end = std::chrono::high_resolution_clock::now ();
+        auto duration =
+        std::chrono::duration_cast<std::chrono::microseconds> (end - start);
+
+        std::cout << "Read time: " << duration.count () << " microseconds\n";
         client.read (std::span<char> (data, length));
     }
+    connection.stop ();
     spdlog::debug ("end handle connection");
 }
 
