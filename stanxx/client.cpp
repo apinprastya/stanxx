@@ -3,6 +3,7 @@
 #include "server.h"
 #include "subscriber.h"
 #include "transport_tcp.h"
+#include <iostream>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>
@@ -47,43 +48,23 @@ Client::~Client () {
         _subscriberManagerHandler->getSubscriberManager ()->unsubscribeClientId (_id);
 }
 
-asio::awaitable<void> Client::run () {
-    if (_connection != nullptr) {
-        // first we need to send the welcome message
-        static char* data =
-        "INFO "
-        "{\"server_id\":"
-        "\"NCEUKVMQR4KCNGMKEAIEFS5OF4VMI34DXCTZ5HBFR4YSLETPHFDEWIRQ\",\"server_"
-        "name\":\"NCEUKVMQR4KCNGMKEAIEFS5OF4VMI34DXCTZ5HBFR4YSLETPHFDEWIRQ\","
-        "\"version\":\"2.11.0-dev\",\"proto\" : 1,\"go\" : "
-        "\"go1.23.3\",\"host\" : \"0.0.0.0\",\"port\" : 4222,\"headers\" : "
-        "true,\"max_payload\" : "
-        "1048576,\"client_id\":5,\"client_ip\":\"127.0.0.1\",\"xkey\":"
-        "\"XBRNVBBFW45EB3RA7JI3D6HU6ROXESE2EU2IXXTWYOCENKIGI5AW2GU2\"}\r\n";
-    } else {
-        throw std::runtime_error ("connection is null");
-    }
-}
-
-asio::awaitable<void> Client::loopRead () {
-}
 
 void Client::read (const std::span<char>& data) {
-    spdlog::debug ("client new data: {}: {}", data.size (),
-    quote (std::string (data.data (), data.size ())));
-    auto start  = std::chrono::high_resolution_clock::now ();
+    /*spdlog::debug ("client new data: {}: {}", data.size (),
+    quote (std::string (data.data (), data.size ())));*/
+    // auto start  = std::chrono::high_resolution_clock::now ();
     auto result = _parser->parseMessage (data);
     if (result.has_value ()) {
         spdlog::error ("error parsing message: {}", result.value ().errorString ());
     }
-    auto end = std::chrono::high_resolution_clock::now ();
+    /*auto end = std::chrono::high_resolution_clock::now ();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds> (end - start);
 
-    std::cout << "Execution time: " << duration.count () << " microseconds\n";
+    std::cout << "Execution time: " << duration.count () << " microseconds\n";*/
 }
 
 void Client::processConnect (const std::span<const char>& data) {
-    spdlog::debug ("Connect args: {}", data.data ());
+    SPDLOG_DEBUG ("Connect args: {}", data.data ());
 
     auto dataJson = nlohmann::json::parse (data.begin (), data.end (), nullptr, false);
     if (dataJson.is_discarded ()) {
@@ -92,26 +73,18 @@ void Client::processConnect (const std::span<const char>& data) {
         return;
     }
     auto reqArg = dataJson.get<ClientOpts> ();
-    spdlog::debug ("{} {} {}", reqArg.name, reqArg.lang, reqArg.version);
-
-    /*if (!_pingTimer) {
-        _pingTimer = std::make_shared<seastar::timer<>> ();
-    }
-
-    _pingTimer->set_callback ([this] () { (void)sendPing (); });
-    // TODO: set the ping interval from the client opts
-    _pingTimer->arm_periodic (std::chrono::seconds{ 5 });*/
+    SPDLOG_DEBUG ("{} {} {}", reqArg.name, reqArg.lang, reqArg.version);
 }
 
 void Client::processPing () {
-    spdlog::debug ("process ping message");
+    SPDLOG_DEBUG ("process ping message");
     constexpr const char* pongMessage = "PONG\r\n";
     const std::size_t length          = std::strlen (pongMessage);
     _connection->queue (std::vector<char> (pongMessage, pongMessage + length));
 }
 
 void Client::sendPing () {
-    spdlog::debug ("sending ping");
+    SPDLOG_DEBUG ("sending ping");
     constexpr const char* pongMessage = "PING\r\n";
     const std::size_t length          = std::strlen (pongMessage);
     _connection->queue (std::vector<char> (pongMessage, pongMessage + length));
@@ -119,28 +92,28 @@ void Client::sendPing () {
 }
 
 void Client::sendError (const std::string& err) {
-    spdlog::debug ("sending error");
+    SPDLOG_DEBUG ("sending error");
     auto messageStr = fmt::format ("-ERR '{}'\r\n", err);
     _connection->queue (std::vector<char> (messageStr.begin (), messageStr.end ()));
 }
 
 void Client::sendOK () {
-    spdlog::debug ("sending ok");
+    SPDLOG_DEBUG ("sending ok");
     constexpr const char* okMessage = "+OK\r\n";
     const std::size_t length        = std::strlen (okMessage);
     _connection->queue (std::vector<char> (okMessage, okMessage + length));
 }
 
 void Client::processPong () {
-    spdlog::debug ("got pong message");
+    SPDLOG_DEBUG ("got pong message");
     _roundTrip.calculateRrt ();
 }
 
 void Client::processSubscribe (const std::vector<std::string_view>& args) {
     if (args.size () == 2)
-        spdlog::debug ("got subscibe message: {} : {}", args[0], args[1]);
+        SPDLOG_DEBUG ("got subscibe message: {} : {}", args[0], args[1]);
     else if (args.size () == 3)
-        spdlog::debug ("got subscibe message: {} : {} : {}", args[0], args[1], args[2]);
+        SPDLOG_DEBUG ("got subscibe message: {} : {} : {}", args[0], args[1], args[2]);
     auto subject    = std::string (args[0]);
     auto subId      = std::string (args[1]);
     auto subscriber = std::make_shared<Subscriber> (subject, subId, this);
@@ -149,34 +122,32 @@ void Client::processSubscribe (const std::vector<std::string_view>& args) {
 
 void Client::processPublish (const PublishArg& publishArg,
 const std::span<const char>& data) {
-    spdlog::debug ("publish subject: {}; reply: {}; data: {}", publishArg.subject,
-    publishArg.reply, std::string (data.begin (), data.end ()));
+    /*spdlog::debug ("publish subject: {}; reply: {}; data: {}", publishArg.subject,
+    publishArg.reply, std::string (data.begin (), data.end ()));*/
     auto subscribers = _subscriberManagerHandler->getSubscriberManager ()->getSubscriber (
     publishArg.subject);
-    spdlog::debug ("subscriber length: {}", subscribers.size ());
+    // spdlog::debug ("subscriber length: {}", subscribers.size ());
     if (subscribers.size () == 0) {
         return;
     }
     for (const auto& subcriber : subscribers) {
         CharBuffer buffer;
-        buffer.write ("MSG ");
-        buffer.write (publishArg.subject);
-        buffer.write (" ");
-        buffer.write (subcriber->getId ());
+        buffer.reserve (64 * 1024);
+        buffer.write ("MSG ", 4);
+        buffer.write (publishArg.subject.data (), publishArg.subject.size ());
+        buffer.write (" ", 1);
+        buffer.write (subcriber->getId ().data (), subcriber->getId ().size ());
         if (!publishArg.reply.empty ()) {
-            buffer.write (" ");
-            buffer.write (publishArg.reply);
+            buffer.write (" ", 1);
+            buffer.write (publishArg.reply.data (), publishArg.reply.size ());
         }
-        buffer.write (" ");
-        buffer.write (std::to_string (data.size ()));
-        buffer.write ("\r\n");
+        buffer.write (" ", 1);
+        auto dataSizeStr = std::to_string (data.size ());
+        buffer.write (dataSizeStr.data (), dataSizeStr.size ());
+        buffer.write ("\r\n", 2);
         buffer.write (data.data (), data.size ());
-        buffer.write ("\r\n");
-
-        auto bufferStr = buffer.getBuffer ();
-        spdlog::info (
-        "buffer value: {}", std::string{ bufferStr.begin (), bufferStr.end () });
-        subcriber->getClient ()->sendMessage (std::move (buffer.getBuffer ()));
+        buffer.write ("\r\n", 2);
+        subcriber->getClient ()->sendMessage (std::move (buffer).getBuffer ());
     }
 }
 

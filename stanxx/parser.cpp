@@ -1,13 +1,12 @@
 #include "parser.h"
 #include "client.h"
-#include <charconv>
 #include <cstring>
 #include <fmt/format.h>
+#include <iostream>
 #include <optional>
 #include <span>
 #include <spdlog/spdlog.h>
 #include <string_view>
-#include <system_error>
 
 constexpr const int lenCRLF = 2;
 
@@ -154,12 +153,20 @@ void MessageParser::reset () {
     _publishArg.reset ();
 }
 
-std::optional<ParserError> MessageParser::parseMessage (const std::span<const char>& data) {
-    spdlog::info ("new data length: {}", data.size ());
+std::optional<ParserError> MessageParser::parseMessage (const std::span<char>& data) {
+    SPDLOG_DEBUG ("new data length: {}", [&data] () { return data.size () });
 
-    microseconds durationPublish{};
+    /*static std::atomic<uint64_t> counter{ 0 };
+    std::string filename = fmt::format ("parser_debug_{}.bin", counter++);
+    std::ofstream debug_file (filename, std::ios::binary);
+    uint32_t data_size = data.size ();
+    debug_file.write (reinterpret_cast<const char*> (&data_size), sizeof
+    (data_size)); debug_file.write (data.data (), data.size ());*/
+
+    /*microseconds durationPublish{};
     microseconds processPublishDuration{};
     auto publishStart = std::chrono::high_resolution_clock::now ();
+    auto p2           = std::chrono::high_resolution_clock::now ();*/
 
     for (int i = 0; i < data.size (); i++) {
         auto b = data[i];
@@ -365,9 +372,10 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
             } break;
             default:
                 if (_buffAvailable) {
-                    auto oldSize = _buff.size ();
+                    /*auto oldSize = _buff.size ();
                     _buff.resize (oldSize + 1);
-                    std::memcpy (_buff.data () + oldSize, &b, 1);
+                    std::memcpy (_buff.data () + oldSize, &b, 1);*/
+                    _buff.push_back (b);
                 }
                 break;
             }
@@ -394,6 +402,7 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
             } else {
                 _start = i;
                 state  = EParserState::PUB_ARG;
+                // p2     = std::chrono::high_resolution_clock::now ();
             }
             break;
         case EParserState::PUB_ARG:
@@ -407,7 +416,6 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
                 } else {
                     arg = _buff;
                 }
-                publishStart = std::chrono::high_resolution_clock::now ();
                 parsePublishArg (std::string_view (arg.data (), arg.size ()));
                 _start = i + 1;
                 _drop  = 0;
@@ -420,38 +428,31 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
             } break;
             default:
                 if (_buffAvailable) {
-                    auto oldSize = _buff.size ();
+                    /*auto oldSize = _buff.size ();
                     _buff.resize (oldSize + 1);
-                    std::memcpy (_buff.data () + oldSize, &b, 1);
+                    std::memcpy (_buff.data () + oldSize, &b, 1);*/
+                    _buff.push_back (b);
                 }
                 break;
             }
             break;
         case EParserState::MSG_PAYLOAD:
             if (_buffAvailable) {
-                auto s            = std::chrono::high_resolution_clock::now ();
                 int sizeToCopy    = _publishArg.length - _buff.size ();
                 int sizeAvailable = data.size () - i;
                 if (sizeAvailable < sizeToCopy) {
                     sizeToCopy = sizeAvailable;
                 }
                 if (sizeToCopy > 0) {
-                    auto s       = std::chrono::high_resolution_clock::now ();
                     auto oldSize = _buff.size ();
                     _buff.resize (oldSize + sizeToCopy);
                     std::memcpy (_buff.data () + oldSize, data.data () + i, sizeToCopy);
-                    i        = i + sizeToCopy - 1;
-                    auto end = std::chrono::high_resolution_clock::now ();
-                    processPublishDuration +=
-                    std::chrono::duration_cast<std::chrono::microseconds> (end - s);
+                    i = i + sizeToCopy - 1;
                 }
                 if (_buff.size () >= _publishArg.length) {
                     // publishStart = std::chrono::high_resolution_clock::now ();
                     state = EParserState::MSG_END_R;
                 }
-                auto end = std::chrono::high_resolution_clock::now ();
-                processPublishDuration +=
-                std::chrono::duration_cast<std::chrono::microseconds> (end - s);
             } else if (i - _start + 1 >= _publishArg.length) {
                 // publishStart = std::chrono::high_resolution_clock::now ();
                 state = EParserState::MSG_END_R;
@@ -461,9 +462,10 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
         case EParserState::MSG_END_R:
             if (b == '\r') {
                 if (_buffAvailable) {
-                    auto oldSize = _buff.size ();
+                    /*auto oldSize = _buff.size ();
                     _buff.resize (oldSize + 1);
-                    std::memcpy (_buff.data () + oldSize, &b, 1);
+                    std::memcpy (_buff.data () + oldSize, &b, 1);*/
+                    _buff.push_back (b);
                 }
                 state = EParserState::MSG_END_N;
             } else {
@@ -477,27 +479,27 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
                 state = EParserState::OP_ERROR;
                 continue;
             }
+            // publishStart = std::chrono::high_resolution_clock::now ();
             if (_buffAvailable) {
-                auto oldSize = _buff.size ();
+                /*auto oldSize = _buff.size ();
                 _buff.resize (oldSize + 1);
-                std::memcpy (_buff.data () + oldSize, &b, 1);
+                std::memcpy (_buff.data () + oldSize, &b, 1);*/
+                _buff.push_back (b);
             } else {
-                auto s       = std::chrono::high_resolution_clock::now ();
-                auto subSpan = data.subspan (_start, _publishArg.length);
-                _buff    = std::vector<char> (subSpan.begin (), subSpan.end ());
-                auto end = std::chrono::high_resolution_clock::now ();
-                processPublishDuration +=
-                std::chrono::duration_cast<std::chrono::microseconds> (end - s);
-                /*spdlog::debug (
-                "real data: {}", std::string (_buff->begin (), _buff->end ()));*/
+                auto oldSize = _buff.size ();
+                _buff.resize (oldSize + _publishArg.length);
+                std::memcpy (_buff.data () + oldSize, data.data () + _start,
+                _publishArg.length);
             }
             _client->processPublish (
             _publishArg, std::span<char> (_buff.begin (), _buff.end ()));
             reset ();
             auto end = std::chrono::high_resolution_clock::now ();
-            durationPublish +=
-            std::chrono::duration_cast<std::chrono::microseconds> (end - publishStart);
-
+            /*durationPublish +=
+            std::chrono::duration_cast<std::chrono::microseconds> (end - publishStart);*/
+            // auto end       = std::chrono::high_resolution_clock::now ();
+            /*processPublishDuration +=
+            std::chrono::duration_cast<std::chrono::microseconds> (end - p2);*/
         } break;
 
         case EParserState::OP_ERROR: reset (); return _parserErr;
@@ -525,9 +527,9 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<const ch
         }
     }
 
-    std::cout << "parse duration: " << durationPublish.count ()
+    /*std::cout << "parse duration: " << durationPublish.count ()
               << " process publish: " << processPublishDuration.count ()
-              << " length: " << data.size () << "\n";
+              << " length: " << data.size () << "\n";*/
 
     return std::nullopt;
 }

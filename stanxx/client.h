@@ -116,7 +116,6 @@ class Client {
     Connection* connection,
     SubscriberManagerHandler* subscriberManagerHandler);
     ~Client ();
-    asio::awaitable<void> run ();
     void read (const std::span<char>& data);
 
     inline const std::string& getId () const {
@@ -133,13 +132,11 @@ class Client {
     RoundTrip _roundTrip{};
     SubscriberManagerHandler* _subscriberManagerHandler;
 
-    virtual asio::awaitable<void> loopRead ();
-
-#ifdef TEST_BUILD
-    protected:
-#else
+    /*#ifdef TEST_BUILD
+        protected:
+    #else
+    #endif*/
     public:
-#endif
     virtual void processConnect (const std::span<const char>& data);
     virtual void processPing ();
     virtual void sendPing ();

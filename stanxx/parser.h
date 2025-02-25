@@ -141,7 +141,7 @@ struct PublishArg {
 class MessageParser {
     public:
     MessageParser (Client* client);
-    std::optional<ParserError> parseMessage (const std::span<const char>& data);
+    std::optional<ParserError> parseMessage (const std::span<char>& data);
 
     private:
     static constexpr size_t INITIAL_BUFFER_SIZE = 64 * 1024; // 64KB

@@ -6,14 +6,7 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/steady_timer.hpp>
 #include <boost/intrusive/list_hook.hpp>
-#include <memory>
 #include <queue>
-#include <seastar/core/gate.hh>
-#include <seastar/core/iostream.hh>
-#include <seastar/core/queue.hh>
-#include <seastar/core/resource.hh>
-#include <seastar/core/temporary_buffer.hh>
-#include <seastar/net/api.hh>
 #include <spdlog/spdlog.h>
 #include <vector>
 
@@ -41,7 +34,6 @@ class Connection : public boost::intrusive::list_base_hook<> {
     asio::io_context* _ioContext;
     TransportTcp* _server;
     asio::ip::tcp::socket _socket;
-    asio::steady_timer _timer;
     std::queue<std::vector<char>> _writeQueue;
 
     friend class TransportTcp;
@@ -59,7 +51,6 @@ class TransportTcp {
     private:
     Server* _server;
     asio::io_context* _ioContext;
-    boost::intrusive::list<Connection> _connections;
 
     asio::awaitable<void> handleConnection (asio::ip::tcp::socket&& socket);
 };
