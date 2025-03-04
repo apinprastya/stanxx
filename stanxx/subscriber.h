@@ -3,10 +3,13 @@
 #include <algorithm>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <shared_mutex>
 #include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
 
 namespace stanxx {
 
@@ -18,7 +21,7 @@ template <typename T> class SubjectNode {
     std::vector<T> subscribers;
 
     public:
-    int subscribe (const std::vector<std::string>& parts, size_t index, const T& item) {
+    int subscribe (const std::vector<std::string_view>& parts, size_t index, const T& item) {
         if (index == parts.size ()) {
             auto it = std::find_if (subscribers.begin (), subscribers.end (),
             [item] (T i) -> bool { return item == i; });
@@ -28,25 +31,25 @@ template <typename T> class SubjectNode {
             subscribers.push_back (item);
             return 0;
         }
-        const std::string& part = parts[index];
+        std::string part = std::string (parts[index]);
         if (!children[part]) {
             children[part] = std::make_unique<SubjectNode> ();
         }
         return children[part]->subscribe (parts, index + 1, item);
     }
 
-    void getSubscriber (const std::vector<std::string>& parts,
+    void getSubscriber (const std::vector<std::string_view>& parts,
     size_t index,
     const std::string& fullTopic,
     std::vector<T>& result,
     bool skip) {
-
+        std::string part = std::string (parts[index]);
         if (index == parts.size () || skip) {
             result.insert (result.end (), subscribers.begin (), subscribers.end ());
         }
 
-        if (index < parts.size () && children.count (parts[index])) {
-            children.at (parts[index])->getSubscriber (parts, index + 1, fullTopic, result, false);
+        if (index < parts.size () && children.count (part)) {
+            children.at (part)->getSubscriber (parts, index + 1, fullTopic, result, false);
         }
 
         if (index < parts.size () && children.count ("*")) {
@@ -115,6 +118,70 @@ class Subscriber {
 };
 
 class SubscriberManager {
+    private:
+    // LRU Cache with capacity limit
+    class SubscriberCache {
+        private:
+        struct CacheEntry {
+            std::vector<std::shared_ptr<Subscriber>> subscribers;
+            std::chrono::steady_clock::time_point lastAccess;
+        };
+
+        static constexpr size_t MAX_CACHE_SIZE = 1000;
+        static constexpr auto CACHE_TTL        = std::chrono::seconds (60);
+
+        mutable std::shared_mutex mutex;
+        mutable std::unordered_map<std::string, CacheEntry> cache;
+
+        public:
+        bool get (const std::string& subject,
+        std::vector<std::shared_ptr<Subscriber>>& result) const {
+            std::shared_lock lock (mutex);
+            auto it = cache.find (subject);
+            if (it != cache.end ()) {
+                auto& entry = it->second;
+                auto now    = std::chrono::steady_clock::now ();
+                if (now - entry.lastAccess < CACHE_TTL) {
+                    result           = entry.subscribers;
+                    entry.lastAccess = now;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        void put (const std::string& subject,
+        const std::vector<std::shared_ptr<Subscriber>>& subscribers) {
+            std::unique_lock lock (mutex);
+            if (cache.size () >= MAX_CACHE_SIZE) {
+                // Remove oldest entries
+                auto now = std::chrono::steady_clock::now ();
+                for (auto it = cache.begin (); it != cache.end ();) {
+                    if (now - it->second.lastAccess > CACHE_TTL) {
+                        it = cache.erase (it);
+                    } else {
+                        ++it;
+                    }
+                }
+                // If still full, remove random entry
+                if (cache.size () >= MAX_CACHE_SIZE) {
+                    cache.erase (cache.begin ());
+                }
+            }
+            cache[subject] = { subscribers, std::chrono::steady_clock::now () };
+        }
+
+        void invalidate (const std::string& subject) {
+            std::unique_lock lock (mutex);
+            cache.erase (subject);
+        }
+
+        void clear () {
+            std::unique_lock lock (mutex);
+            cache.clear ();
+        }
+    };
+
     public:
     int addSubscriber (std::shared_ptr<Subscriber> subscriber);
     void unsubscribeClientId (const std::string& id);
@@ -122,8 +189,9 @@ class SubscriberManager {
 
     private:
     SubjectNode<std::shared_ptr<Subscriber>> root;
+    SubscriberCache cache;
 
-    std::vector<std::string> splitTopic (const std::string& topic) const;
+    std::vector<std::string_view> splitTopic (const std::string& topic) const;
 };
 
 } // namespace stanxx

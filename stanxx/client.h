@@ -116,7 +116,7 @@ class Client {
     Connection* connection,
     SubscriberManagerHandler* subscriberManagerHandler);
     ~Client ();
-    void read (const std::span<char>& data);
+    void read (std::span<const char> data);
 
     inline const std::string& getId () const {
         return _id;
@@ -137,15 +137,14 @@ class Client {
     #else
     #endif*/
     public:
-    virtual void processConnect (const std::span<const char>& data);
+    virtual void processConnect (std::span<const char> data);
     virtual void processPing ();
     virtual void sendPing ();
     virtual void sendError (const std::string& err);
     virtual void sendOK ();
     virtual void processPong ();
     virtual void processSubscribe (const std::vector<std::string_view>& args);
-    virtual void processPublish (const PublishArg& publishArg,
-    const std::span<const char>& data);
+    virtual void processPublish (const PublishArg& publishArg, std::span<const char> data);
     virtual void sendMessage (std::vector<char>&& data);
 };
 } // namespace stanxx

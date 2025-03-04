@@ -1,9 +1,11 @@
 #include "parser.h"
 #include "client.h"
+#include <chrono>
 #include <cstring>
 #include <fmt/format.h>
 #include <iostream>
 #include <optional>
+#include <ratio>
 #include <span>
 #include <spdlog/spdlog.h>
 #include <string_view>
@@ -11,6 +13,8 @@
 constexpr const int lenCRLF = 2;
 
 using microseconds = std::chrono::duration<int64_t, std::micro>;
+using nanoseconds  = std::chrono::duration<int64_t, std::nano>;
+using picosecond   = std::chrono::duration<int64_t, std::pico>;
 
 std::string quote2 (const std::string& str) {
     std::ostringstream oss;
@@ -153,7 +157,7 @@ void MessageParser::reset () {
     _publishArg.reset ();
 }
 
-std::optional<ParserError> MessageParser::parseMessage (const std::span<char>& data) {
+std::optional<ParserError> MessageParser::parseMessage (std::span<const char> data) {
     SPDLOG_DEBUG ("new data length: {}", [&data] () { return data.size () });
 
     /*static std::atomic<uint64_t> counter{ 0 };
@@ -163,16 +167,31 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<char>& d
     debug_file.write (reinterpret_cast<const char*> (&data_size), sizeof
     (data_size)); debug_file.write (data.data (), data.size ());*/
 
-    /*microseconds durationPublish{};
-    microseconds processPublishDuration{};
-    auto publishStart = std::chrono::high_resolution_clock::now ();
-    auto p2           = std::chrono::high_resolution_clock::now ();*/
+    const bool enableProfile = false;
+
+    std::unordered_map<EParserState, std::chrono::nanoseconds> state_timings;
+    nanoseconds durationPublish{};
+    nanoseconds processPublishDuration{};
+    auto publishStart     = std::chrono::high_resolution_clock::now ();
+    auto p2               = std::chrono::high_resolution_clock::now ();
+    auto startedAt        = std::chrono::high_resolution_clock::now ();
+    auto bb               = std::chrono::high_resolution_clock::now ();
+    EParserState oldState = EParserState::OP_START;
 
     for (int i = 0; i < data.size (); i++) {
         auto b = data[i];
+        if (enableProfile && oldState != EParserState::NONE) {
+            auto duration = std::chrono::duration_cast<std::chrono::nanoseconds> (
+            std::chrono::high_resolution_clock::now () - bb);
+            state_timings[oldState] += duration;
+            bb = std::chrono::high_resolution_clock::now ();
+            if (oldState != state) {
+                oldState = state;
+            }
+        }
         switch (state) {
         case EParserState::OP_START: {
-            switch (b) {
+            /*switch (b) {
             case 'C':
             case 'c': state = EParserState::OP_C; break;
             case 'P':
@@ -181,9 +200,16 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<char>& d
             case 's': state = EParserState::OP_S; break;
             default:
                 state = EParserState::OP_ERROR;
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state,
+            parserErrParsing); break;
+            }*/
+            const auto& cmd = COMMAND_TABLE[static_cast<unsigned char> (b)];
+            if (cmd.next_state == EParserState::OP_ERROR) {
                 _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, state, parserErrParsing);
-                break;
+                return _parserErr;
             }
+            state = cmd.next_state;
+            break;
         } break;
         case EParserState::OP_C: {
             if (b == 'o' || b == 'O') {
@@ -372,9 +398,6 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<char>& d
             } break;
             default:
                 if (_buffAvailable) {
-                    /*auto oldSize = _buff.size ();
-                    _buff.resize (oldSize + 1);
-                    std::memcpy (_buff.data () + oldSize, &b, 1);*/
                     _buff.push_back (b);
                 }
                 break;
@@ -402,40 +425,104 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<char>& d
             } else {
                 _start = i;
                 state  = EParserState::PUB_ARG;
-                // p2     = std::chrono::high_resolution_clock::now ();
             }
             break;
-        case EParserState::PUB_ARG:
-            switch (b) {
+        case EParserState::PUB_ARG: {
+            // std::cout << "PUB_ARG: " << b << " : " << i << "\n";
+            /*auto oldI = i;
+            for (int j = oldI; j < data.size (); j++) {
+                // b = data[j];
+                if (data[j] == '\r') {
+                    _drop = 1;
+                } else if (data[j] == '\n') {
+                    std::span<const char> arg;
+                    if (!_buffAvailable) {
+                        auto length = i - _drop - _start;
+                        arg         = data.subspan (_start, length);
+                    } else {
+                        arg = _buff;
+                    }
+                    parsePublishArg (std::string_view (arg.data (), arg.size ()));
+                    //_publishArg.length = 128;
+                    _start = i + 1;
+                    _drop  = 0;
+                    state  = EParserState::MSG_PAYLOAD;
+                    _buff.clear ();
+                    _buffAvailable = false;
+                    if (!_buffAvailable) {
+                        i = _start + _publishArg.length - lenCRLF;
+                    }
+                }
+                i = j;
+            }*/
+
+            const char* p   = data.data () + i;
+            const char* end = data.data () + data.size ();
+
+            while (p < end) {
+                if (*p == '\r') {
+                    _drop = 1;
+                } else if (*p == '\n') {
+                    const size_t length = (p - data.data ()) - _drop - _start;
+                    std::string_view arg;
+
+                    if (!_buffAvailable) {
+                        arg = std::string_view (data.data () + _start, length);
+                    } else {
+                        arg = std::string_view (_buff.data (), _buff.size ());
+                    }
+
+                    parsePublishArg (arg);
+                    _start = p - data.data () + 1;
+                    _drop  = 0;
+                    state  = EParserState::MSG_PAYLOAD;
+                    _buff.clear ();
+                    _buffAvailable = false;
+
+                    if (!_buffAvailable) {
+                        i = _start + _publishArg.length - lenCRLF;
+                    } else {
+                        i = p - data.data ();
+                    }
+                    break;
+                }
+                p++;
+            }
+
+            if (enableProfile) {
+                auto duration = std::chrono::duration_cast<std::chrono::nanoseconds> (
+                std::chrono::high_resolution_clock::now () - bb);
+                state_timings[EParserState::PUB_ARG] += duration;
+                bb = std::chrono::high_resolution_clock::now ();
+            }
+
+
+            /*switch (b) {
             case '\r': _drop = 1; break;
             case '\n': {
                 std::span<const char> arg;
                 if (!_buffAvailable) {
                     auto length = i - _drop - _start;
-                    arg = std::span<const char> (data.data () + _start, length);
+                    arg         = data.subspan (_start, length);
                 } else {
                     arg = _buff;
                 }
-                parsePublishArg (std::string_view (arg.data (), arg.size ()));
-                _start = i + 1;
-                _drop  = 0;
-                state  = EParserState::MSG_PAYLOAD;
-                _buff.clear ();
+                // parsePublishArg (std::string_view (arg.data (), arg.size
+            ())); _publishArg.length = 128; _start             = i + 1; _drop =
+            0; state              = EParserState::MSG_PAYLOAD; _buff.clear ();
                 _buffAvailable = false;
-                /*if (!_buff) {
+                if (!_buffAvailable) {
                     i = _start + _publishArg.length - lenCRLF;
-                }*/
+                }
+                // p2 = std::chrono::high_resolution_clock::now ();
             } break;
             default:
                 if (_buffAvailable) {
-                    /*auto oldSize = _buff.size ();
-                    _buff.resize (oldSize + 1);
-                    std::memcpy (_buff.data () + oldSize, &b, 1);*/
                     _buff.push_back (b);
                 }
                 break;
-            }
-            break;
+            }*/
+        } break;
         case EParserState::MSG_PAYLOAD:
             if (_buffAvailable) {
                 int sizeToCopy    = _publishArg.length - _buff.size ();
@@ -462,9 +549,6 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<char>& d
         case EParserState::MSG_END_R:
             if (b == '\r') {
                 if (_buffAvailable) {
-                    /*auto oldSize = _buff.size ();
-                    _buff.resize (oldSize + 1);
-                    std::memcpy (_buff.data () + oldSize, &b, 1);*/
                     _buff.push_back (b);
                 }
                 state = EParserState::MSG_END_N;
@@ -481,25 +565,24 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<char>& d
             }
             // publishStart = std::chrono::high_resolution_clock::now ();
             if (_buffAvailable) {
-                /*auto oldSize = _buff.size ();
-                _buff.resize (oldSize + 1);
-                std::memcpy (_buff.data () + oldSize, &b, 1);*/
                 _buff.push_back (b);
             } else {
-                auto oldSize = _buff.size ();
+                /*auto oldSize = _buff.size ();
                 _buff.resize (oldSize + _publishArg.length);
                 std::memcpy (_buff.data () + oldSize, data.data () + _start,
-                _publishArg.length);
+                _publishArg.length);*/
+                _client->processPublish (_publishArg,
+                std::span<const char> (data.data () + _start, _publishArg.length));
             }
-            _client->processPublish (
-            _publishArg, std::span<char> (_buff.begin (), _buff.end ()));
+            /*_client->processPublish (_publishArg,
+            std::span<const char> (data.data () + _start, +_publishArg.length));*/
             reset ();
-            auto end = std::chrono::high_resolution_clock::now ();
-            /*durationPublish +=
-            std::chrono::duration_cast<std::chrono::microseconds> (end - publishStart);*/
-            // auto end       = std::chrono::high_resolution_clock::now ();
-            /*processPublishDuration +=
-            std::chrono::duration_cast<std::chrono::microseconds> (end - p2);*/
+            /*auto end = std::chrono::high_resolution_clock::now ();
+            durationPublish +=
+            std::chrono::duration_cast<std::chrono::nanoseconds> (end - publishStart);
+            processPublishDuration +=
+            std::chrono::duration_cast<std::chrono::nanoseconds> (end - p2);*/
+
         } break;
 
         case EParserState::OP_ERROR: reset (); return _parserErr;
@@ -527,9 +610,20 @@ std::optional<ParserError> MessageParser::parseMessage (const std::span<char>& d
         }
     }
 
-    /*std::cout << "parse duration: " << durationPublish.count ()
+    /*auto end = std::chrono::high_resolution_clock::now ();
+    auto endDuration =
+    std::chrono::duration_cast<std::chrono::nanoseconds> (end - startedAt);
+    std::cout << "parse duration: " << durationPublish.count ()
               << " process publish: " << processPublishDuration.count ()
+              << " end duration: " << endDuration.count ()
               << " length: " << data.size () << "\n";*/
+
+    if (enableProfile) {
+        for (const auto& [state, duration] : state_timings) {
+            std::cout << "State " << to_string (state) << ": "
+                      << duration.count () << " ns\n";
+        }
+    }
 
     return std::nullopt;
 }
@@ -621,7 +715,6 @@ void MessageParser::parsePublishArg (std::string_view data) {
 
     space = data.find (' ', pos);
     if (space == std::string_view::npos) {
-        // 2-part format: subject length
         auto len_str       = data.substr (pos);
         _publishArg.length = std::stoul (std::string (len_str));
     } else {

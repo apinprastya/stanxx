@@ -129,7 +129,7 @@ asio::awaitable<void> TransportTcp::handleConnection (asio::ip::tcp::socket&& so
         client.read (std::span<char> (data, length));
     }
     connection.stop ();
-    spdlog::debug ("end handle connection");
+    // spdlog::error ("end handle connection");
 }
 
 asio::awaitable<void> TransportTcp::listen (const std::string& address, int port) {
@@ -137,8 +137,12 @@ asio::awaitable<void> TransportTcp::listen (const std::string& address, int port
     asio::ip::tcp::acceptor acceptor (
     *_ioContext, asio::ip::tcp::endpoint (asio::ip::tcp::v4 (), port));
     acceptor.set_option (asio::ip::tcp::acceptor::reuse_address (true));
-    acceptor.set_option (asio::socket_base::send_buffer_size (256 * 1024));
-    acceptor.set_option (asio::socket_base::receive_buffer_size (256 * 1024));
+    acceptor.non_blocking (true);
+    acceptor.native_non_blocking (true);
+    acceptor.set_option (asio::ip::tcp::no_delay (true));
+    acceptor.set_option (asio::socket_base::keep_alive (true));
+    // acceptor.set_option (asio::socket_base::send_buffer_size (256 * 1024));
+    //  acceptor.set_option (asio::socket_base::receive_buffer_size (256 * 1024));
     while (true) {
         auto [ec, socket] =
         co_await acceptor.async_accept (asio::as_tuple (asio::use_awaitable));
@@ -146,9 +150,12 @@ asio::awaitable<void> TransportTcp::listen (const std::string& address, int port
             spdlog::error ("Accept error: {}", ec.message ());
             continue;
         }
+        /*asio::socket_base::receive_buffer_size option;
+        socket.get_option (option);
+        std::cout << "Default receive buffer size: " << option.value () << " bytes\n";
         socket.non_blocking (true);
         socket.set_option (asio::ip::tcp::no_delay (true));
-        socket.set_option (asio::socket_base::keep_alive (true));
+        socket.set_option (asio::socket_base::keep_alive (true));*/
         asio::co_spawn (acceptor.get_executor (),
         handleConnection (std::move (socket)), asio::detached);
     }

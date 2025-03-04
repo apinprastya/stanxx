@@ -88,6 +88,7 @@ enum class EParserState {
     OP_INFO,
     INFO_ARG,
     OP_ERROR,
+    NONE
 };
 
 enum class ParseErrorCode {
@@ -138,10 +139,15 @@ struct PublishArg {
     }
 };
 
+struct CommandMapping {
+    EParserState next_state;
+    bool case_sensitive;
+};
+
 class MessageParser {
     public:
     MessageParser (Client* client);
-    std::optional<ParserError> parseMessage (const std::span<char>& data);
+    std::optional<ParserError> parseMessage (std::span<const char> data);
 
     private:
     static constexpr size_t INITIAL_BUFFER_SIZE = 64 * 1024; // 64KB
@@ -159,5 +165,20 @@ class MessageParser {
     void reset ();
     std::vector<std::string_view> splitSubcribeArg (const std::span<const char>& data);
     void parsePublishArg (std::string_view data);
+
+    static constexpr std::array<CommandMapping, 256> makeCommandTable () {
+        std::array<CommandMapping, 256> table{};
+        // Initialize all to error state
+        for (auto& entry : table) {
+            entry = { EParserState::OP_ERROR, false };
+        }
+        // Set valid transitions
+        table['C'] = table['c'] = { EParserState::OP_C, false };
+        table['P'] = table['p'] = { EParserState::OP_P, false };
+        table['S'] = table['s'] = { EParserState::OP_S, false };
+        return table;
+    }
+    static const inline std::array<CommandMapping, 256> COMMAND_TABLE =
+    makeCommandTable ();
 };
 } // namespace stanxx

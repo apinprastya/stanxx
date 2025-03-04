@@ -49,7 +49,7 @@ Client::~Client () {
 }
 
 
-void Client::read (const std::span<char>& data) {
+void Client::read (std::span<const char> data) {
     /*spdlog::debug ("client new data: {}: {}", data.size (),
     quote (std::string (data.data (), data.size ())));*/
     // auto start  = std::chrono::high_resolution_clock::now ();
@@ -60,10 +60,11 @@ void Client::read (const std::span<char>& data) {
     /*auto end = std::chrono::high_resolution_clock::now ();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds> (end - start);
 
-    std::cout << "Execution time: " << duration.count () << " microseconds\n";*/
+    std::cout << "Execution time: " << duration.count ()
+              << "µs; length: " << data.size () << " : " << result.has_value () << "\n";*/
 }
 
-void Client::processConnect (const std::span<const char>& data) {
+void Client::processConnect (std::span<const char> data) {
     SPDLOG_DEBUG ("Connect args: {}", data.data ());
 
     auto dataJson = nlohmann::json::parse (data.begin (), data.end (), nullptr, false);
@@ -120,20 +121,24 @@ void Client::processSubscribe (const std::vector<std::string_view>& args) {
     _subscriberManagerHandler->getSubscriberManager ()->addSubscriber (subscriber);
 }
 
-void Client::processPublish (const PublishArg& publishArg,
-const std::span<const char>& data) {
+void Client::processPublish (const PublishArg& publishArg, std::span<const char> data) {
     /*spdlog::debug ("publish subject: {}; reply: {}; data: {}", publishArg.subject,
     publishArg.reply, std::string (data.begin (), data.end ()));*/
     auto subscribers = _subscriberManagerHandler->getSubscriberManager ()->getSubscriber (
     publishArg.subject);
     // spdlog::debug ("subscriber length: {}", subscribers.size ());
-    if (subscribers.size () == 0) {
+    if (subscribers.empty ()) {
         return;
     }
+
+    // Prepare common parts of the message
+    static constexpr std::string_view MSG_PREFIX = "MSG ";
+    static constexpr std::string_view CRLF       = "\r\n";
+
     for (const auto& subcriber : subscribers) {
         CharBuffer buffer;
         buffer.reserve (64 * 1024);
-        buffer.write ("MSG ", 4);
+        buffer.write (MSG_PREFIX.data (), MSG_PREFIX.size ());
         buffer.write (publishArg.subject.data (), publishArg.subject.size ());
         buffer.write (" ", 1);
         buffer.write (subcriber->getId ().data (), subcriber->getId ().size ());
@@ -144,9 +149,9 @@ const std::span<const char>& data) {
         buffer.write (" ", 1);
         auto dataSizeStr = std::to_string (data.size ());
         buffer.write (dataSizeStr.data (), dataSizeStr.size ());
-        buffer.write ("\r\n", 2);
+        buffer.write (CRLF.data (), CRLF.size ());
         buffer.write (data.data (), data.size ());
-        buffer.write ("\r\n", 2);
+        buffer.write (CRLF.data (), CRLF.size ());
         subcriber->getClient ()->sendMessage (std::move (buffer).getBuffer ());
     }
 }

@@ -2,13 +2,14 @@
 #include "parser.h"
 #include <benchmark/benchmark.h>
 #include <fstream>
+#include <iostream>
 
 class DummyClient : public stanxx::Client {
     public:
     DummyClient () : stanxx::Client ("dummy", 0, nullptr, nullptr) {
     }
 
-    void processConnect (const std::span<const char>& data) override {
+    void processConnect (std::span<const char> data) override {
     }
     void processPing () override {
     }
@@ -23,7 +24,7 @@ class DummyClient : public stanxx::Client {
     void processSubscribe (const std::vector<std::string_view>& args) override {
     }
     void processPublish (const stanxx::PublishArg& publishArg,
-    const std::span<const char>& data) override {
+    std::span<const char> data) override {
     }
     void sendMessage (std::vector<char>&& data) override {
     }
@@ -57,10 +58,14 @@ static void BM_ParseMessage (benchmark::State& state) {
     }
 
     for (auto _ : state) {
-        for (int i = 0; i < 5; i++) {
+        for (int i = 3; i < 4; i++) {
             // std::string message = "CONNECT arg\r\n";
-
+            auto start = std::chrono::high_resolution_clock::now ();
             parser.parseMessage (std::span<char> (datas[i].data (), datas[i].size ()));
+            auto end = std::chrono::high_resolution_clock::now ();
+            auto duration =
+            std::chrono::duration_cast<std::chrono::microseconds> (end - start);
+            std::cout << "Execution time: " << duration.count () << "µs\n";
         }
     }
 }
