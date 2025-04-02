@@ -44,6 +44,7 @@ void Server::run (int argc, char** argv) {
             spdlog::info ("server listen ended");
             return mainTransport.stop ();
         });
+        co_await _clusteredSubscribeManager->stop ();
         /*return mainTransport.start (_clusteredSubscribeManager.get ()).then ([this] {
             seastar::handle_signal (
             SIGINT,
