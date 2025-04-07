@@ -141,13 +141,11 @@ class SubscriberManager {
         static constexpr size_t MAX_CACHE_SIZE = 1000;
         static constexpr auto CACHE_TTL        = std::chrono::seconds (300);
 
-        mutable std::shared_mutex mutex;
         mutable std::unordered_map<std::string, CacheEntry> cache;
 
         public:
         bool get (const std::string& subject,
         std::vector<std::shared_ptr<Subscriber>>& result) const {
-            std::shared_lock lock (mutex);
             auto it = cache.find (subject);
             if (it != cache.end ()) {
                 auto& entry = it->second;
@@ -163,7 +161,6 @@ class SubscriberManager {
 
         void put (const std::string& subject,
         const std::vector<std::shared_ptr<Subscriber>>& subscribers) {
-            std::unique_lock lock (mutex);
             if (cache.size () >= MAX_CACHE_SIZE) {
                 auto now = std::chrono::steady_clock::now ();
                 for (auto it = cache.begin (); it != cache.end ();) {
@@ -181,12 +178,10 @@ class SubscriberManager {
         }
 
         void invalidate (const std::string& subject) {
-            std::unique_lock lock (mutex);
             cache.erase (subject);
         }
 
         void clear () {
-            std::unique_lock lock (mutex);
             cache.clear ();
         }
     };
