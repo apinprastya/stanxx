@@ -100,6 +100,12 @@ enum class EParserConnectState : int {
     OP_CONNEC,
     OP_CONNECT,
 };
+enum class EParserHPubState : int {
+    OP_HP,
+    OP_HPU,
+    OP_HPUB,
+    OP_HPUB_SPC,
+};
 enum class EParserPingState : int {
     OP_PI,
     OP_PIN,
@@ -178,7 +184,7 @@ class MessageParser {
     private:
     Client* _client     = nullptr;
     EParserState _state = EParserState::OP_START;
-    std::variant<EParserPlusState, EParserMinusState, EParserConnectState, EParserPublishState, EParserInfoState, EParserPingState, EParserPongState> _subState;
+    std::variant<EParserPlusState, EParserMinusState, EParserConnectState, EParserHPubState, EParserPublishState, EParserInfoState, EParserPingState, EParserPongState> _subState;
     int _subStateIdx{};
     int _drop{};
     int _start{};

@@ -264,6 +264,16 @@ seastar::temporary_buffer<char> data) {
                 break;
             }
             break;
+        case EParserState::OP_H:
+            if (b == 'p' || b == 'P') {
+                _state = EParserState::OP_HP;
+            } else if (b == 'm' || b == 'M') {
+                _state = EParserState::OP_HM;
+            } else {
+                _parserErr.setCodeAndError (ParseErrorCode::Err_Parsing, _state, parserErrParsing);
+                _state = EParserState::OP_ERROR;
+            }
+            break;
         case EParserState::OP_P:
             switch (b) {
             case 'i':
