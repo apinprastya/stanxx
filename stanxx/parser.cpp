@@ -32,8 +32,6 @@ constexpr std::string_view to_string (stanxx::EParserState state) {
     case EParserState::CONNECT_ARG: return "CONNECT_ARG";
     case EParserState::OP_H: return "OP_H";
     case EParserState::OP_HP: return "OP_HP";
-    case EParserState::OP_HPU: return "OP_HPU";
-    case EParserState::OP_HPUB: return "OP_HPUB";
     case EParserState::OP_HPUB_SPC: return "OP_HPUB_SPC";
     case EParserState::HPUB_ARG: return "HPUB_ARG";
     case EParserState::OP_HM: return "OP_HM";
@@ -43,7 +41,6 @@ constexpr std::string_view to_string (stanxx::EParserState state) {
     case EParserState::HMSG_ARG: return "HMSG_ARG";
     case EParserState::OP_P: return "OP_P";
     case EParserState::OP_PU: return "OP_PU";
-    case EParserState::OP_PUB: return "OP_PUB";
     case EParserState::OP_PUB_SPC: return "OP_PUB_SPC";
     case EParserState::PUB_ARG: return "PUB_ARG";
     case EParserState::OP_PI: return "OP_PI";
@@ -117,6 +114,12 @@ static constexpr std::array<StateTransition<EParserConnectState>, 7> connectTran
 { EParserConnectState::OP_CONNE, { 'e', 'E' } },
 { EParserConnectState::OP_CONNEC, { 'c', 'C' } },
 { EParserConnectState::OP_CONNECT, { 't', 'T' } },
+} };
+
+static constexpr std::array<StateTransition<EParserHPubState>, 7> hpubTransitions{ {
+{ EParserHPubState::OP_HPU, { 'u', 'U' } },
+{ EParserHPubState::OP_HPUB, { 'b', 'B' } },
+{ EParserHPubState::OP_HPUB_SPC, { ' ', '\t' } },
 } };
 
 static constexpr std::array<StateTransition<EParserInfoState>, 7> infoTransations{ {
@@ -274,6 +277,61 @@ seastar::temporary_buffer<char> data) {
                 _state = EParserState::OP_ERROR;
             }
             break;
+        case EParserState::OP_HP: {
+            auto max = std::min (i + 5, static_cast<int> (data.size ()) - i);
+            i += parseSubStateMachine (std::span<const char> (data.get () + i, max),
+            i, hpubTransitions, EParserHPubState::OP_HPUB_SPC, EParserState::OP_HPUB_SPC);
+        } break;
+        case EParserState::OP_HPUB_SPC:
+            if (b == ' ' || b == '\t') {
+                continue;
+            } else {
+                _state = EParserState::HPUB_ARG;
+                _start = i;
+            }
+            break;
+        case EParserState::HPUB_ARG: {
+            const char* p   = data.get () + i;
+            const char* end = data.get () + data.size ();
+
+            while (p < end) {
+                if (*p == '\r') {
+                    _drop = 1;
+                } else if (*p == '\n') {
+                    const size_t length = (p - data.get ()) - _drop - _start;
+                    std::string_view arg;
+
+                    if (!_buffAvailable) {
+                        arg = std::string_view (data.get () + _start, length);
+                    } else {
+                        auto oldSize = _buff.size ();
+                        _buff.resize (oldSize + length);
+                        std::memcpy (_buff.data () + oldSize, data.get (), length);
+                        arg = std::string_view (_buff.data (), _buff.size ());
+                    }
+
+                    auto errResult = parseHPubArg (arg);
+                    if (errResult.has_value ()) {
+                        _parserErr = errResult.value ();
+                        _state     = EParserState::OP_ERROR;
+                        break;
+                    }
+                    _start = p - data.get () + 1;
+                    _drop  = 0;
+                    _state = EParserState::MSG_PAYLOAD;
+                    _buff.clear ();
+
+                    if (!_buffAvailable) {
+                        i = _start + _publishArg.length - lenCRLF;
+                    } else {
+                        i = p - data.get ();
+                    }
+                    _buffAvailable = false;
+                    break;
+                }
+                p++;
+            }
+        } break;
         case EParserState::OP_P:
             switch (b) {
             case 'i':
@@ -424,13 +482,13 @@ seastar::temporary_buffer<char> data) {
                     _drop  = 0;
                     _state = EParserState::MSG_PAYLOAD;
                     _buff.clear ();
-                    _buffAvailable = false;
 
                     if (!_buffAvailable) {
                         i = _start + _publishArg.length - lenCRLF;
                     } else {
                         i = p - data.get ();
                     }
+                    _buffAvailable = false;
                     break;
                 }
                 p++;
@@ -566,6 +624,52 @@ void MessageParser::parsePublishArg (std::string_view data) {
         auto len_str       = data.substr (pos);
         _publishArg.length = std::stoul (std::string (len_str));
     }
+}
+
+std::optional<ParserError> MessageParser::parseHPubArg (std::string_view data) {
+    auto args = split_by_space_or_tab (data);
+    if (args.size () == 3) {
+        _publishArg.subject      = std::string (args[0]);
+        _publishArg.reply        = {};
+        _publishArg.headerLength = std::stoul (std::string (args[1]));
+        _publishArg.length       = std::stoul (std::string (args[2]));
+        return std::nullopt;
+    } else if (args.size () == 4) {
+        _publishArg.subject      = std::string (args[0]);
+        _publishArg.reply        = std::string (args[1]);
+        _publishArg.headerLength = std::stoul (std::string (args[2]));
+        _publishArg.length       = std::stoul (std::string (args[3]));
+        return std::nullopt;
+    }
+    _parserErr.setCodeAndError (ParseErrorCode::Err_HPubArg, _state,
+    "header publish arguments length invalid");
+    return _parserErr;
+}
+
+std::vector<std::string_view> MessageParser::split_by_space_or_tab (std::string_view str) {
+    std::vector<std::string_view> result;
+    size_t start = 0;
+
+    while (start < str.size ()) {
+        // Skip leading spaces/tabs
+        while (start < str.size () && (str[start] == ' ' || str[start] == '\t')) {
+            ++start;
+        }
+
+        if (start >= str.size ())
+            break;
+
+        // Find the next delimiter (space or tab)
+        size_t end = start;
+        while (end < str.size () && str[end] != ' ' && str[end] != '\t') {
+            ++end;
+        }
+
+        result.emplace_back (str.substr (start, end - start));
+        start = end;
+    }
+
+    return result;
 }
 
 } // namespace stanxx

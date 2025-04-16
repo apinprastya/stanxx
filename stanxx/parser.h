@@ -25,8 +25,6 @@ enum class EParserState : int {
     CONNECT_ARG,
     OP_H,
     OP_HP,
-    OP_HPU,
-    OP_HPUB,
     OP_HPUB_SPC,
     HPUB_ARG,
     OP_HM,
@@ -101,7 +99,6 @@ enum class EParserConnectState : int {
     OP_CONNECT,
 };
 enum class EParserHPubState : int {
-    OP_HP,
     OP_HPU,
     OP_HPUB,
     OP_HPUB_SPC,
@@ -129,8 +126,9 @@ enum class EParserInfoState : int {
 };
 
 enum class ParseErrorCode {
-    Err_None,
-    Err_Parsing,
+    Err_None    = 0,
+    Err_Parsing = 1,
+    Err_HPubArg = 20,
 };
 
 struct ParserError {
@@ -153,11 +151,13 @@ struct PublishArg {
     std::string subject;
     std::string reply;
     int length;
+    int headerLength;
 
     inline void reset () {
-        subject = {};
-        reply   = {};
-        length  = {};
+        subject      = {};
+        reply        = {};
+        length       = {};
+        headerLength = {};
     }
 };
 
@@ -196,6 +196,7 @@ class MessageParser {
     void reset ();
     std::vector<std::string_view> splitSubcribeArg (std::span<const char> data);
     void parsePublishArg (std::string_view data);
+    std::optional<ParserError> parseHPubArg (std::string_view data);
 
     template <typename TState, size_t N>
     int parseSubStateMachine (std::span<const char> data,
@@ -231,5 +232,7 @@ class MessageParser {
         }
         return j;
     }
+
+    std::vector<std::string_view> split_by_space_or_tab (std::string_view str);
 };
 } // namespace stanxx
