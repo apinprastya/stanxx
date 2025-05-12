@@ -1,0 +1,38 @@
+# Stanxx
+
+This project was reimplement NATS server using CPP. This project is just for learning purpose, there is no plan for being professional project.
+
+## Dependency
+- Linux, this only avalable for linux only
+- Seastar, compile and install to your system. https://github.com/scylladb/seastar
+- `apt install libgtest-dev libspdlog-dev libbenchmark-dev libgmock-dev nlohmann-json3-dev clangd`
+
+## VSCode
+`.vscode/settings.json`
+```json
+{
+    "cmake.configureOnOpen": false,
+    "cmake.options.statusBarVisibility": "visible",
+    "cmake.pinnedCommands": [
+        "workbench.action.tasks.configureTaskRunner",
+        "workbench.action.tasks.runTask"
+    ],
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "cmake.configureEnvironment": {},
+    "cmake.configureOnEdit": false,
+    "cmake.configureArgs": [
+        "-DCMAKE_MODULE_PATH=[your-seastar-folder]/seastar/cmake",
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=1"
+    ],
+    "cmake.copyCompileCommands": "${workspaceFolder}/compile_commands.json"
+}
+```
+
+## Benchmark
+```bash
+$ nats bench pub --msgs=10000 --size="256" --clients=1 hello.world
+08:38:20 Starting Core NATS publish benchmark [clients=1, msg-size=256 B, msgs=10,000, multi-subject=false, multi-subject-max=100,000, sleep=0s, subject=hello.world]
+08:38:20 Starting publisher, publishing 10,000 messages
+
+Pub stats: 5,837,050 msgs/sec ~ 1.39 GB/sec
+```
